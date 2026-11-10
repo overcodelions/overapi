@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A sample SOAP 1.1 service (document/literal) for trying overapi's SOAP
+     support: run `node examples/acme-inventory-soap-server.mjs`, then import
+     http://localhost:8089/soap/inventory?wsdl. Calls need WS-Security:
+     user acme, password s3cret-pass. -->
+<wsdl:definitions xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/"
+                  xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+                  xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+                  xmlns:tns="urn:acme:inventory"
+                  targetNamespace="urn:acme:inventory"
+                  name="AcmeInventory">
+  <wsdl:documentation>Acme's warehouse inventory: items, stock levels and adjustments.</wsdl:documentation>
+  <wsdl:types>
+    <xsd:schema targetNamespace="urn:acme:inventory" elementFormDefault="qualified">
+      <xsd:complexType name="Item">
+        <xsd:sequence>
+          <xsd:element name="Sku" type="xsd:string"/>
+          <xsd:element name="Name" type="xsd:string"/>
+          <xsd:element name="Category" type="xsd:string"/>
+          <xsd:element name="Quantity" type="xsd:int"/>
+          <xsd:element name="Price" type="xsd:decimal"/>
+          <xsd:element name="UpdatedAt" type="xsd:dateTime" minOccurs="0"/>
+        </xsd:sequence>
+      </xsd:complexType>
+      <xsd:element name="ListItems">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Category" type="xsd:string" minOccurs="0">
+              <xsd:annotation><xsd:documentation>Only items in this category: tools, parts or supplies.</xsd:documentation></xsd:annotation>
+            </xsd:element>
+            <xsd:element name="Limit" type="xsd:int" minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="ListItemsResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Item" type="tns:Item" minOccurs="0" maxOccurs="unbounded"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="GetItem">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Sku" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="GetItemResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Item" type="tns:Item"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="AdjustStock">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Sku" type="xsd:string"/>
+            <xsd:element name="Delta" type="xsd:int"/>
+            <xsd:element name="Reason" type="xsd:string" minOccurs="0"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="AdjustStockResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Sku" type="xsd:string"/>
+            <xsd:element name="Quantity" type="xsd:int"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="DeleteItem">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Sku" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="DeleteItemResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="Deleted" type="xsd:boolean"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </wsdl:types>
+
+  <wsdl:message name="ListItemsIn"><wsdl:part name="parameters" element="tns:ListItems"/></wsdl:message>
+  <wsdl:message name="ListItemsOut"><wsdl:part name="parameters" element="tns:ListItemsResponse"/></wsdl:message>
+  <wsdl:message name="GetItemIn"><wsdl:part name="parameters" element="tns:GetItem"/></wsdl:message>
+  <wsdl:message name="GetItemOut"><wsdl:part name="parameters" element="tns:GetItemResponse"/></wsdl:message>
+  <wsdl:message name="AdjustStockIn"><wsdl:part name="parameters" element="tns:AdjustStock"/></wsdl:message>
+  <wsdl:message name="AdjustStockOut"><wsdl:part name="parameters" element="tns:AdjustStockResponse"/></wsdl:message>
+  <wsdl:message name="DeleteItemIn"><wsdl:part name="parameters" element="tns:DeleteItem"/></wsdl:message>
+  <wsdl:message name="DeleteItemOut"><wsdl:part name="parameters" element="tns:DeleteItemResponse"/></wsdl:message>
+
+  <wsdl:portType name="InventoryPort">
+    <wsdl:operation name="ListItems">
+      <wsdl:documentation>Items in the warehouse, optionally one category.</wsdl:documentation>
+      <wsdl:input message="tns:ListItemsIn"/><wsdl:output message="tns:ListItemsOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="GetItem">
+      <wsdl:documentation>One item by SKU, with its stock level.</wsdl:documentation>
+      <wsdl:input message="tns:GetItemIn"/><wsdl:output message="tns:GetItemOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="AdjustStock">
+      <wsdl:documentation>Adds to (or, with a negative delta, takes from) an item's stock.</wsdl:documentation>
+      <wsdl:input message="tns:AdjustStockIn"/><wsdl:output message="tns:AdjustStockOut"/>
+    </wsdl:operation>
+    <wsdl:operation name="DeleteItem">
+      <wsdl:documentation>Removes an item from the catalogue for good.</wsdl:documentation>
+      <wsdl:input message="tns:DeleteItemIn"/><wsdl:output message="tns:DeleteItemOut"/>
+    </wsdl:operation>
+  </wsdl:portType>
+
+  <wsdl:binding name="InventoryBinding" type="tns:InventoryPort">
+    <soap:binding style="document" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <wsdl:operation name="ListItems"><soap:operation soapAction="urn:acme:inventory/ListItems"/><wsdl:input><soap:body use="literal"/></wsdl:input><wsdl:output><soap:body use="literal"/></wsdl:output></wsdl:operation>
+    <wsdl:operation name="GetItem"><soap:operation soapAction="urn:acme:inventory/GetItem"/><wsdl:input><soap:body use="literal"/></wsdl:input><wsdl:output><soap:body use="literal"/></wsdl:output></wsdl:operation>
+    <wsdl:operation name="AdjustStock"><soap:operation soapAction="urn:acme:inventory/AdjustStock"/><wsdl:input><soap:body use="literal"/></wsdl:input><wsdl:output><soap:body use="literal"/></wsdl:output></wsdl:operation>
+    <wsdl:operation name="DeleteItem"><soap:operation soapAction="urn:acme:inventory/DeleteItem"/><wsdl:input><soap:body use="literal"/></wsdl:input><wsdl:output><soap:body use="literal"/></wsdl:output></wsdl:operation>
+  </wsdl:binding>
+
+  <wsdl:service name="AcmeInventory">
+    <wsdl:port name="InventoryPort" binding="tns:InventoryBinding">
+      <soap:address location="http://localhost:8089/soap/inventory"/>
+    </wsdl:port>
+  </wsdl:service>
+</wsdl:definitions>

@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Clickable things look clickable — Preflight leaves buttons on the arrow. */
+@layer base {
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  select {
+    cursor: pointer;
+  }
+  button:disabled {
+    cursor: not-allowed;
+  }
+}
+
+/* Bricolage Grotesque: overcli's display face, bundled so the app looks
+ * the same offline. SIL Open Font License 1.1 — fonts/OFL-BricolageGrotesque.txt. */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('./fonts/BricolageGrotesque-latin.woff2') format('woff2');
+}
+
+/* overcli's palette, as channels. Hairline borders that sit just above the
+ * surface, a card fill that is barely there, and the family's indigo accent. */
+:root {
+  --c-surface: 246 246 248;
+  /* Where the work sits: white in light mode, so the sidebar and lists (surface) read as a frame around it. */
+  --c-canvas: 255 255 255;
+  --c-surface-muted: 236 236 240;
+  --c-surface-elevated: 255 255 255;
+  --c-ink: 23 23 28;
+  --c-ink-muted: 74 74 82;
+  /* Darkened so small grey text on white still reads (~5:1). */
+  --c-ink-faint: 104 104 114;
+  /* The family accent — overcli's indigo, as overgit and overdb use. */
+  --c-accent: 93 114 255;
+  --c-accent-strong: 67 85 224;
+  --c-rule: 220 220 226;
+  --c-rule-strong: 194 194 203;
+  --c-wash: rgba(0, 0, 0, 0.03);
+  --c-wash-strong: rgba(0, 0, 0, 0.06);
+  --c-good: 4 120 87;
+  --c-warn: 161 98 7;
+  --c-bad: 200 34 34;
+  color-scheme: light;
+}
+
+:root.dark {
+  --c-surface: 28 28 33;
+  --c-canvas: 28 28 33;
+  --c-surface-muted: 36 36 43;
+  --c-surface-elevated: 42 42 51;
+  --c-ink: 232 232 238;
+  --c-ink-muted: 160 160 168;
+  --c-ink-faint: 112 112 122;
+  --c-accent: 124 139 255;
+  --c-accent-strong: 93 114 255;
+  --c-rule: 40 40 46;
+  --c-rule-strong: 56 56 64;
+  --c-wash: rgba(255, 255, 255, 0.025);
+  --c-wash-strong: rgba(255, 255, 255, 0.05);
+  --c-good: 74 222 128;
+  --c-warn: 251 191 36;
+  --c-bad: 248 113 113;
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: rgb(var(--c-surface));
+  color: rgb(var(--c-ink));
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+input,
+textarea,
+pre,
+code,
+.selectable {
+  user-select: text;
+}
+
+.drag {
+  -webkit-app-region: drag;
+}
+.no-drag,
+.drag button,
+.drag input,
+.drag select,
+.drag label {
+  -webkit-app-region: no-drag;
+}
+
+@layer components {
+  .field {
+    @apply w-full rounded-md border border-rule-strong/70 bg-surface-elevated/60 px-2.5 py-1.5 text-[13px] text-ink outline-none transition-colors placeholder:text-ink-faint;
+  }
+  .field:hover {
+    @apply border-rule-strong;
+  }
+  .field:focus {
+    @apply border-accent/60 ring-2 ring-accent/15;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-rule-strong/70 bg-surface-elevated/60 px-2.5 py-1 text-[12px] font-medium text-ink transition-colors hover:border-rule-strong hover:bg-wash-strong disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[12px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-strong disabled:opacity-50;
+  }
+  .icon-btn {
+    @apply inline-flex h-7 w-7 items-center justify-center rounded-md text-ink-muted transition-colors hover:bg-wash-strong hover:text-ink;
+  }
+  .label {
+    @apply mb-1.5 block text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint;
+  }
+  .display {
+    @apply font-display tracking-tight;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--c-wash-strong);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--c-rule-strong));
+  background-clip: content-box;
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.rise {
+  animation: rise 220ms ease-out both;
+}
+
+/* Focus: no browser default (macOS paints it orange) on a click — an indigo
+   ring only when moving by keyboard. */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid rgb(var(--c-accent) / 0.7);
+  outline-offset: 1px;
+  border-radius: 6px;
+}
