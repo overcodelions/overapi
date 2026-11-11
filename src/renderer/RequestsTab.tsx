@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './store';
 import { RenewButton } from './Renew';
 import { SeenInput } from './SeenInput';
+import { PathChip, ValuePicker, keptAgo, useKept } from './ValuePicker';
 import { Empty, EnvChip, EnvDot, Method, SafetyBadge, SAFETY_LABEL, Splitter, SubTabs, Toggle, useWidth } from './ui';
 import {
   DEFAULT_RESPONSE_LIMIT,
@@ -27,7 +28,7 @@ import { VALID_NAME } from '@shared/naming';
 import { checkProject, TOOL_BUDGET } from '@shared/check';
 import { formatPath, toCurl, varsUsed } from '@shared/capture';
 import { shapeOf } from '@shared/scenario';
-import { isIdLike } from '@shared/chains';
+import { applyLinks, findLinks, isIdLike, readablePath, type Link } from '@shared/chains';
 import { addStep, emptyScenario, feedsFrom, paramsFor, wireInto, type Feed } from '@shared/wire';
 import type { SeenSuggestions, TryResponse } from '@shared/ipc';
 import { JsonView, parseMaybeJson } from './JsonView';
@@ -435,7 +436,11 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
   const [needs, setNeeds] = useState<string[] | null>(null);
   const [fetching, setFetching] = useState<string | null>(null);
   /// The request that gives a needed value also needs arguments nobody has given it yet.
-  const [askFor, setAskFor] = useState<{ name: string; toolId: string; values: Record<string, string> } | null>(null);
+  const [askFor, setAskFor] = useState<{
+    name: string;
+    toolId: string;
+    values: Record<string, string>;
+  } | null>(null);
   const [view, setView] = useState<'table' | 'json' | 'chart'>('table');
   const [left, setLeft] = useState<LeftTab>('params');
   const [right, setRight] = useState<RightTab>('body');
@@ -446,6 +451,10 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
   const [result, setResult] = useState<TryResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [armed, setArmed] = useState(false);
+  /// The path shows its parameters by what they are until you click into it.
+  const [pathEdit, setPathEdit] = useState(false);
+  const pathRef = useRef<HTMLInputElement>(null);
+  const chips = !pathEdit && /\{[^}]+\}/.test(tool.path);
   const [keeping, setKeeping] = useState<{
     capture: Capture;
     value: string;
@@ -610,14 +619,28 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
     }
     const still = src.params.filter((x) => (x.required || x.in === 'path') && blank(a[x.name]));
     if (still.length) {
-      setAskFor({ name, toolId: src.id, values: Object.fromEntries(still.map((x) => [x.name, ''])) });
+      setAskFor({
+        name,
+        toolId: src.id,
+        values: Object.fromEntries(still.map((x) => [x.name, ''])),
+      });
       return;
     }
     setAskFor(null);
     // What was given is kept on it, so next time it just runs.
-    if (Object.keys(given).length) update((x) => ({ ...x, tools: x.tools.map((t) => (t.id === src.id ? { ...t, example: a } : t)) }));
+    if (Object.keys(given).length)
+      update((x) => ({
+        ...x,
+        tools: x.tools.map((t) => (t.id === src.id ? { ...t, example: a } : t)),
+      }));
     setFetching(src.name);
-    const r = await window.overapi.invoke('tool:try', { path: path!, project: p, env: env.name, toolId: src.id, args: a });
+    const r = await window.overapi.invoke('tool:try', {
+      path: path!,
+      project: p,
+      env: env.name,
+      toolId: src.id,
+      args: a,
+    });
     await refreshRuntime();
     void refreshHistory();
     setFetching(null);
@@ -663,319 +686,350 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
     .reduce((acc, kv, i) => `${acc}${i ? '&' : '?'}${kv}`, '');
 
   return (
-    <div className="flex min-w-0 flex-1">
-      {/* Request */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-[53px] shrink-0 items-center gap-2 border-b border-rule px-3">
-          <select className="field w-[92px] font-mono text-[12px] font-bold" value={tool.method} onChange={(e) => reroute(e.target.value as HttpMethod, tool.path)}>
-            {(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as HttpMethod[]).map((m) => (
-              <option key={m}>{m}</option>
-            ))}
-          </select>
-          <div className="field flex min-w-0 items-center gap-0 overflow-hidden p-0">
-            {env && (
-              <span
-                className="flex shrink-0 items-center gap-1.5 self-stretch border-r border-rule-strong/70 bg-wash-strong px-2.5 text-[12px] font-semibold"
-                title="Environment — switch it in the title bar"
-              >
-                <EnvDot name={env.name} />
-                {env.name}
-              </span>
-            )}
-            <span className="max-w-[45%] shrink-0 truncate py-1.5 pl-2.5 font-mono text-[12px] text-ink-faint" title={env ? fillVars(env.baseUrl, env, rt) : ''}>
-              {env ? fillVars(env.baseUrl, env, rt) || '(no base URL)' : ''}
+    <div className="flex min-w-0 flex-1 flex-col">
+      {/* The request line, across both panes: the URL gets the room. */}
+      <div className="flex h-[53px] shrink-0 items-center gap-2 border-b border-rule px-3">
+        <select className="field w-[92px] font-mono text-[12px] font-bold" value={tool.method} onChange={(e) => reroute(e.target.value as HttpMethod, tool.path)}>
+          {(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as HttpMethod[]).map((m) => (
+            <option key={m}>{m}</option>
+          ))}
+        </select>
+        <div className="field flex min-w-0 items-center gap-0 overflow-hidden p-0">
+          {env && (
+            <span
+              className="flex shrink-0 items-center gap-1.5 self-stretch border-r border-rule-strong/70 bg-wash-strong px-2.5 text-[12px] font-semibold"
+              title="Environment — switch it in the title bar"
+            >
+              <EnvDot name={env.name} />
+              {env.name}
             </span>
-            <input
-              key={tool.path}
-              id="overapi-path"
-              className={`min-w-[60px] bg-transparent py-1.5 font-mono text-[12px] outline-none ${query ? 'shrink-0 pr-0' : 'flex-1 pr-2'}`}
-              style={query ? { width: `${Math.max(tool.path.length, 4)}ch` } : undefined}
-              defaultValue={tool.path}
-              title="The path. Paste a whole URL with a query and its values fill the params."
-              onBlur={(e) => e.target.value !== tool.path && reroute(tool.method, e.target.value.startsWith('/') ? e.target.value : `/${e.target.value}`)}
-              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-              onPaste={(e) => {
-                const text = e.clipboardData.getData('text').trim();
-                if (!text.includes('?') && !/^https?:\/\//.test(text)) return;
-                e.preventDefault();
-                let u: URL;
-                try {
-                  u = new URL(text, 'http://paste.invalid');
-                } catch {
-                  return;
-                }
-                let at = u.pathname;
-                try {
-                  const base = new URL(fillVars(env?.baseUrl ?? '', env!, rt)).pathname.replace(/\/$/, '');
-                  if (/^https?:/.test(text) && base && at.startsWith(base)) at = at.slice(base.length) || '/';
-                } catch {
-                  // No base URL: keep the path as pasted.
-                }
-                (e.target as HTMLInputElement).value = at;
-                // Its query becomes the params' values; names the request
-                // doesn't list yet are added to it.
-                const found: Record<string, string> = {};
-                u.searchParams.forEach((v, k) => (found[k] = found[k] ? `${found[k]},${v}` : v));
-                const unknown = Object.keys(found).filter((k) => !tool.params.some((x) => x.name === k));
-                if (unknown.length) set((t) => ({ ...t, params: [...t.params, ...unknown.map((name) => ({ name, in: 'query' as const, required: false, schema: { type: 'string' } }))] }));
-                setValues((v) => ({ ...v, ...found }));
-                if (Object.keys(found).length)
-                  say(`Filled ${Object.keys(found).length} param${Object.keys(found).length === 1 ? '' : 's'} from the URL${unknown.length ? ` (${unknown.length} new)` : ''}.`);
-              }}
-            />
-            {query && (
-              <span className="min-w-0 flex-1 truncate py-1.5 pr-2 font-mono text-[12px]" title={query}>
-                {query.split(/(?=[?&])/).map((part, k) => {
-                  const [key, ...v] = part.slice(1).split('=');
-                  return (
-                    <span key={k}>
-                      <span className="text-accent">
-                        {part[0]}
-                        {key}=
-                      </span>
-                      <span className="text-ink">{v.join('=')}</span>
+          )}
+          <span className="max-w-[45%] shrink-0 truncate py-1.5 pl-2.5 font-mono text-[12px] text-ink-faint" title={env ? fillVars(env.baseUrl, env, rt) : ''}>
+            {env ? fillVars(env.baseUrl, env, rt) || '(no base URL)' : ''}
+          </span>
+          {chips && (
+            <button
+              type="button"
+              className={`min-w-0 truncate py-1.5 text-left font-mono text-[12px] ${query ? 'shrink-0 pr-0' : 'flex-1 pr-2'}`}
+              title="Click to edit the path"
+              onClick={() => pathRef.current?.focus()}
+            >
+              {tool.path
+                .split(/(\{[^}]+\})/)
+                .map((part, k) => (/^\{[^}]+\}$/.test(part) ? <PathChip key={k} toolId={tool.id} name={part.slice(1, -1)} value={values[part.slice(1, -1)] ?? ''} /> : <span key={k}>{part}</span>))}
+            </button>
+          )}
+          <input
+            ref={pathRef}
+            key={tool.path}
+            id="overapi-path"
+            className={chips ? 'pointer-events-none w-0 min-w-0 p-0 opacity-0' : `min-w-[60px] bg-transparent py-1.5 font-mono text-[12px] outline-none ${query ? 'shrink-0 pr-0' : 'flex-1 pr-2'}`}
+            style={query && !chips ? { width: `${Math.max(tool.path.length, 4)}ch` } : undefined}
+            onFocus={() => setPathEdit(true)}
+            defaultValue={tool.path}
+            title="The path. Paste a whole URL with a query and its values fill the params."
+            onBlur={(e) => {
+              setPathEdit(false);
+              if (e.target.value !== tool.path) reroute(tool.method, e.target.value.startsWith('/') ? e.target.value : `/${e.target.value}`);
+            }}
+            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+            onPaste={(e) => {
+              const text = e.clipboardData.getData('text').trim();
+              if (!text.includes('?') && !/^https?:\/\//.test(text)) return;
+              e.preventDefault();
+              let u: URL;
+              try {
+                u = new URL(text, 'http://paste.invalid');
+              } catch {
+                return;
+              }
+              let at = u.pathname;
+              try {
+                const base = new URL(fillVars(env?.baseUrl ?? '', env!, rt)).pathname.replace(/\/$/, '');
+                if (/^https?:/.test(text) && base && at.startsWith(base)) at = at.slice(base.length) || '/';
+              } catch {
+                // No base URL: keep the path as pasted.
+              }
+              (e.target as HTMLInputElement).value = at;
+              // Its query becomes the params' values; names the request
+              // doesn't list yet are added to it.
+              const found: Record<string, string> = {};
+              u.searchParams.forEach((v, k) => (found[k] = found[k] ? `${found[k]},${v}` : v));
+              const unknown = Object.keys(found).filter((k) => !tool.params.some((x) => x.name === k));
+              if (unknown.length)
+                set((t) => ({
+                  ...t,
+                  params: [
+                    ...t.params,
+                    ...unknown.map((name) => ({
+                      name,
+                      in: 'query' as const,
+                      required: false,
+                      schema: { type: 'string' },
+                    })),
+                  ],
+                }));
+              setValues((v) => ({ ...v, ...found }));
+              if (Object.keys(found).length)
+                say(`Filled ${Object.keys(found).length} param${Object.keys(found).length === 1 ? '' : 's'} from the URL${unknown.length ? ` (${unknown.length} new)` : ''}.`);
+            }}
+          />
+          {query && (
+            <span className="min-w-0 flex-1 truncate py-1.5 pr-2 font-mono text-[12px]" title={query}>
+              {query.split(/(?=[?&])/).map((part, k) => {
+                const [key, ...v] = part.slice(1).split('=');
+                return (
+                  <span key={k}>
+                    <span className="text-accent">
+                      {part[0]}
+                      {key}=
                     </span>
-                  );
-                })}
-              </span>
-            )}
-          </div>
-          <button
-            className={armed || (env && envKind(env.name) === 'production') ? 'btn-primary shrink-0 !bg-bad' : 'btn-primary shrink-0'}
-            disabled={busy || !env?.baseUrl}
-            onClick={() => void send()}
-          >
-            {busy ? 'Sending…' : armed ? `Really send to ${env?.name}` : `Send to ${env?.name ?? '…'}`}
-            {!busy && !armed && <span className="ml-1.5 text-[10.5px] font-normal opacity-70">⌘↵</span>}
-          </button>
-        </div>
-        <SubTabs
-          tabs={[
-            {
-              id: 'params',
-              label: `Params${(() => {
-                const all = tool.params.filter((x) => x.in !== 'body');
-                const on = all.filter((x) => x.in === 'path' || x.required || (values[x.name] ?? '') !== '').length;
-                return all.length ? ` ${on}/${all.length}` : '';
-              })()}`,
-            },
-            ...(['GET', 'HEAD', 'DELETE'].includes(tool.method) && tool.bodyMode === 'none'
-              ? []
-              : [
-                  {
-                    id: 'body' as LeftTab,
-                    label: `Body${tool.bodyMode !== 'none' ? ` ${tool.params.filter((x) => x.in === 'body').length}` : ''}`,
-                  },
-                ]),
-            {
-              id: 'headers',
-              label: `Headers${Object.keys(tool.headers ?? {}).length ? ` ${Object.keys(tool.headers ?? {}).length}` : ''}`,
-            },
-            {
-              id: 'auth',
-              label: (
-                <>
-                  <span className={tool.auth || (missingSecret && refused) ? '' : 'opacity-60'}>Auth</span>
-                  {tool.auth ? ' ·' : ''}
-                  {missingSecret && refused && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warn align-middle" />}
-                </>
-              ),
-            },
-            {
-              id: 'flow',
-              label: tool.captures?.length || tool.before?.length ? `Flow ${(tool.captures?.length ?? 0) + (tool.before?.length ?? 0)}` : <span className="opacity-60">Flow</span>,
-            },
-            {
-              id: 'tool',
-              label: <>Tool {issues.some((i) => i.level !== 'info') && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warn align-middle" />}</>,
-            },
-          ]}
-          value={left}
-          onChange={setLeft}
-        />
-        {env && !env.baseUrl && (
-          <div className="flex flex-wrap items-center gap-2 bg-warn/10 px-3 py-2 text-[12px] text-warn">
-            <span className="flex-1">
-              <b>{env.name} has no base URL yet</b> — requests can’t go anywhere.
+                    <span className="text-ink">{v.join('=')}</span>
+                  </span>
+                );
+              })}
             </span>
-            {p.envs
-              .filter((e) => e.baseUrl && e.name !== env.name)
-              .slice(0, 1)
-              .map((o) => (
-                <button
-                  key={o.name}
-                  className="btn"
-                  onClick={() =>
-                    update((x) => ({
-                      ...x,
-                      envs: x.envs.map((e) => (e.name === env.name ? { ...e, baseUrl: o.baseUrl } : e)),
-                    }))
-                  }
-                >
-                  Use {o.name}’s URL
-                </button>
-              ))}
-            <button className="btn" onClick={() => setTab('envs')}>
-              Set base URL…
-            </button>
-          </div>
-        )}
-        {armed && (
-          <div className="flex items-center justify-between bg-bad/10 px-3 py-1.5 text-[12px] text-bad">
-            This {SAFETY_LABEL[tool.safety].toLowerCase()} request changes data on {env?.name}. Click again to send it.
-            <button className="text-ink-muted" onClick={() => setArmed(false)}>
-              Cancel
-            </button>
-          </div>
-        )}
-        {used.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-rule px-3 py-2 text-[11px]">
-            <span className="text-ink-faint">Uses</span>
-            {used.map((n) => {
-              const v = rt[n] ?? env?.vars?.[n];
-              const from = producers(n);
-              return (
-                <button
-                  key={n}
-                  type="button"
-                  disabled={!!v || !from.length || !!fetching}
-                  onClick={() => void runFirst(n)}
-                  title={
-                    v
-                      ? `= ${v} — ${runtime.find((r) => r.name === n)?.from ? `kept from ${runtime.find((r) => r.name === n)?.from}` : 'from the environment'}`
-                      : from.length
-                        ? `Click to run ${from[0]} now and keep it`
-                        : 'Not set — add it to the environment, or keep it from a response'
-                  }
-                  className={`rounded-full px-2 py-0.5 font-mono ${v ? 'bg-good/15 text-good' : 'bg-warn/15 text-warn'} ${!v && from.length ? 'hover:bg-warn/25' : ''}`}
-                >
-                  {`{{${n}}}`} {v ? `= ${v.length > 14 ? `${v.slice(0, 12)}…` : v}` : from.length ? (fetching === from[0] ? `running ${from[0]}…` : `← run ${from[0]} first`) : 'not set'}
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {askFor &&
-          (() => {
-            const src = p.tools.find((t) => t.id === askFor.toolId);
-            if (!src) return null;
-            return (
-              <div className="mx-3 mt-3 rounded-lg border border-accent/40 bg-accent/[0.06] px-3.5 py-3 text-[12.5px]">
-                <p className="leading-relaxed">
-                  To get <b className="font-mono">{`{{${askFor.name}}}`}</b>, <b>{src.name}</b> runs first — and it needs {Object.keys(askFor.values).length === 1 ? 'a value' : 'values'} it has never
-                  been sent with. They’ll be kept on it for next time.
-                </p>
-                <div className="mt-2.5 space-y-2">
-                  {Object.keys(askFor.values).map((k) => {
-                    const prm = src.params.find((x) => x.name === k);
-                    return (
-                      <div key={k} className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3">
-                        <span className="truncate font-mono text-[12px]" title={prm?.description}>
-                          {k}
-                        </span>
-                        <SeenInput
-                          toolId={src.id}
-                          param={k}
-                          value={askFor.values[k]}
-                          onValue={(v) => setAskFor({ ...askFor, values: { ...askFor.values, [k]: v } })}
-                          placeholder={prm?.description?.slice(0, 60) || 'value'}
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
-                <div className="mt-3 flex items-center gap-2">
+          )}
+        </div>
+        <button className={armed || (env && envKind(env.name) === 'production') ? 'btn-primary shrink-0 !bg-bad' : 'btn-primary shrink-0'} disabled={busy || !env?.baseUrl} onClick={() => void send()}>
+          {busy ? 'Sending…' : armed ? `Really send to ${env?.name}` : `Send to ${env?.name ?? '…'}`}
+          {!busy && !armed && <span className="ml-1.5 text-[10.5px] font-normal opacity-70">⌘↵</span>}
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1">
+        {/* Request */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <SubTabs
+            tabs={[
+              {
+                id: 'params',
+                label: `Params${(() => {
+                  const all = tool.params.filter((x) => x.in !== 'body');
+                  const on = all.filter((x) => x.in === 'path' || x.required || (values[x.name] ?? '') !== '').length;
+                  return all.length ? ` ${on}/${all.length}` : '';
+                })()}`,
+              },
+              ...(['GET', 'HEAD', 'DELETE'].includes(tool.method) && tool.bodyMode === 'none'
+                ? []
+                : [
+                    {
+                      id: 'body' as LeftTab,
+                      label: `Body${tool.bodyMode !== 'none' ? ` ${tool.params.filter((x) => x.in === 'body').length}` : ''}`,
+                    },
+                  ]),
+              {
+                id: 'headers',
+                label: `Headers${Object.keys(tool.headers ?? {}).length ? ` ${Object.keys(tool.headers ?? {}).length}` : ''}`,
+              },
+              {
+                id: 'auth',
+                label: (
+                  <>
+                    <span className={tool.auth || (missingSecret && refused) ? '' : 'opacity-60'}>Auth</span>
+                    {tool.auth ? ' ·' : ''}
+                    {missingSecret && refused && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warn align-middle" />}
+                  </>
+                ),
+              },
+              {
+                id: 'flow',
+                label: tool.captures?.length || tool.before?.length ? `Flow ${(tool.captures?.length ?? 0) + (tool.before?.length ?? 0)}` : <span className="opacity-60">Flow</span>,
+              },
+              {
+                id: 'tool',
+                label: <>Tool {issues.some((i) => i.level !== 'info') && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warn align-middle" />}</>,
+              },
+            ]}
+            value={left}
+            onChange={setLeft}
+          />
+          {env && !env.baseUrl && (
+            <div className="flex flex-wrap items-center gap-2 bg-warn/10 px-3 py-2 text-[12px] text-warn">
+              <span className="flex-1">
+                <b>{env.name} has no base URL yet</b> — requests can’t go anywhere.
+              </span>
+              {p.envs
+                .filter((e) => e.baseUrl && e.name !== env.name)
+                .slice(0, 1)
+                .map((o) => (
                   <button
-                    type="button"
-                    className="btn-primary h-8"
-                    disabled={!!fetching || Object.values(askFor.values).some((v) => !v.trim())}
-                    onClick={() => {
-                      const given = Object.fromEntries(
-                        Object.entries(askFor.values).map(([k, v]) => {
-                          const prm = src.params.find((x) => x.name === k);
-                          return [k, prm ? coerce(prm, v) : v];
-                        }),
-                      );
-                      void runFirst(askFor.name, given);
-                    }}
+                    key={o.name}
+                    className="btn"
+                    onClick={() =>
+                      update((x) => ({
+                        ...x,
+                        envs: x.envs.map((e) => (e.name === env.name ? { ...e, baseUrl: o.baseUrl } : e)),
+                      }))
+                    }
                   >
-                    {fetching ? `Running ${fetching}…` : `Run ${src.name}, then send`}
+                    Use {o.name}’s URL
                   </button>
-                  <button type="button" className="btn h-8" onClick={() => setAskFor(null)}>
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            );
-          })()}
-        {needs && !askFor && (
-          <div className="mx-3 mt-3 rounded-lg border border-warn/40 bg-warn/[0.07] px-3.5 py-3 text-[12.5px]">
-            {needs.map((n) => {
-              const from = producers(n);
-              return (
-                <p key={n} className="leading-relaxed">
-                  <b className="font-mono">{`{{${n}}}`}</b> has no value yet
-                  {from.length ? (
-                    <>
-                      {' '}
-                      — it comes from <b>{from[0]}</b>. Sending now would put the text <span className="font-mono">{`{{${n}}}`}</span> in the request.
-                    </>
-                  ) : (
-                    ' — nothing in this API keeps it. Type a value in its param, or add it to the environment.'
-                  )}
-                </p>
-              );
-            })}
-            <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              {needs.some((n) => producers(n).length) && (
-                <button type="button" className="btn-primary h-8" disabled={!!fetching} onClick={() => void runFirst(needs.find((n) => producers(n).length)!)}>
-                  {fetching ? `Running ${fetching}…` : `Run ${producers(needs.find((n) => producers(n).length)!)[0]} first, then send`}
-                </button>
-              )}
-              <button
-                type="button"
-                className="btn h-8"
-                onClick={() => {
-                  setNeeds(null);
-                  setLeft('params');
-                }}
-              >
-                I’ll pick a value
-              </button>
-              <button type="button" className="text-[12px] text-ink-muted hover:text-ink" onClick={() => void send(true)}>
-                Send anyway
+                ))}
+              <button className="btn" onClick={() => setTab('envs')}>
+                Set base URL…
               </button>
             </div>
-          </div>
-        )}
-        <div className="min-h-0 flex-1 overflow-y-auto p-3">
-          {left === 'params' && (
-            <>
-              <ParamTable tool={tool} kinds={['path', 'query', 'header']} values={values} setValues={setValues} set={set} recent={mine} onAllHistory={() => setRight('history')} />
-            </>
           )}
-          {left === 'body' && <BodyEditor tool={tool} values={values} setValues={setValues} set={set} />}
-          {left === 'headers' && <HeadersEditor tool={tool} set={set} />}
-          {left === 'auth' && <AuthEditor tool={tool} set={set} />}
-          {left === 'flow' && <FlowEditor tool={tool} set={set} producers={producers} />}
-          {left === 'tool' && <AsTool tool={tool} set={set} issues={issues.map((i) => i.message)} />}
-          {missingSecret && refused && left !== 'tool' && left !== 'auth' && (
-            <p className="mt-3 text-[11px] text-warn">
-              The server refused ({result?.status}) and this request’s sign-in isn’t set.{' '}
-              <button className="underline" onClick={() => setLeft('auth')}>
-                Set it in Auth
+          {armed && (
+            <div className="flex items-center justify-between bg-bad/10 px-3 py-1.5 text-[12px] text-bad">
+              This {SAFETY_LABEL[tool.safety].toLowerCase()} request changes data on {env?.name}. Click again to send it.
+              <button className="text-ink-muted" onClick={() => setArmed(false)}>
+                Cancel
               </button>
-            </p>
+            </div>
           )}
+          {used.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-rule px-3 py-2 text-[11px]">
+              <span className="text-ink-faint">Uses</span>
+              {used.map((n) => {
+                const v = rt[n] ?? env?.vars?.[n];
+                const from = producers(n);
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    disabled={!!v || !from.length || !!fetching}
+                    onClick={() => void runFirst(n)}
+                    title={
+                      v
+                        ? `= ${v} — ${runtime.find((r) => r.name === n)?.from ? `kept from ${runtime.find((r) => r.name === n)?.from}` : 'from the environment'}`
+                        : from.length
+                          ? `Click to run ${from[0]} now and keep it`
+                          : 'Not set — add it to the environment, or keep it from a response'
+                    }
+                    className={`rounded-full px-2 py-0.5 font-mono ${v ? 'bg-good/15 text-good' : 'bg-warn/15 text-warn'} ${!v && from.length ? 'hover:bg-warn/25' : ''}`}
+                  >
+                    {`{{${n}}}`} {v ? `= ${v.length > 14 ? `${v.slice(0, 12)}…` : v}` : from.length ? (fetching === from[0] ? `running ${from[0]}…` : `← run ${from[0]} first`) : 'not set'}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {askFor &&
+            (() => {
+              const src = p.tools.find((t) => t.id === askFor.toolId);
+              if (!src) return null;
+              return (
+                <div className="mx-3 mt-3 rounded-lg border border-accent/40 bg-accent/[0.06] px-3.5 py-3 text-[12.5px]">
+                  <p className="leading-relaxed">
+                    To get <b className="font-mono">{`{{${askFor.name}}}`}</b>, <b>{src.name}</b> runs first — and it needs {Object.keys(askFor.values).length === 1 ? 'a value' : 'values'} it has
+                    never been sent with. They’ll be kept on it for next time.
+                  </p>
+                  <div className="mt-2.5 space-y-2">
+                    {Object.keys(askFor.values).map((k) => {
+                      const prm = src.params.find((x) => x.name === k);
+                      return (
+                        <div key={k} className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3">
+                          <span className="truncate font-mono text-[12px]" title={prm?.description}>
+                            {k}
+                          </span>
+                          <SeenInput
+                            toolId={src.id}
+                            param={k}
+                            value={askFor.values[k]}
+                            onValue={(v) =>
+                              setAskFor({
+                                ...askFor,
+                                values: { ...askFor.values, [k]: v },
+                              })
+                            }
+                            placeholder={prm?.description?.slice(0, 60) || 'value'}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="btn-primary h-8"
+                      disabled={!!fetching || Object.values(askFor.values).some((v) => !v.trim())}
+                      onClick={() => {
+                        const given = Object.fromEntries(
+                          Object.entries(askFor.values).map(([k, v]) => {
+                            const prm = src.params.find((x) => x.name === k);
+                            return [k, prm ? coerce(prm, v) : v];
+                          }),
+                        );
+                        void runFirst(askFor.name, given);
+                      }}
+                    >
+                      {fetching ? `Running ${fetching}…` : `Run ${src.name}, then send`}
+                    </button>
+                    <button type="button" className="btn h-8" onClick={() => setAskFor(null)}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              );
+            })()}
+          {needs && !askFor && (
+            <div className="mx-3 mt-3 rounded-lg border border-warn/40 bg-warn/[0.07] px-3.5 py-3 text-[12.5px]">
+              {needs.map((n) => {
+                const from = producers(n);
+                return (
+                  <p key={n} className="leading-relaxed">
+                    <b className="font-mono">{`{{${n}}}`}</b> has no value yet
+                    {from.length ? (
+                      <>
+                        {' '}
+                        — it comes from <b>{from[0]}</b>. Sending now would put the text <span className="font-mono">{`{{${n}}}`}</span> in the request.
+                      </>
+                    ) : (
+                      ' — nothing in this API keeps it. Type a value in its param, or add it to the environment.'
+                    )}
+                  </p>
+                );
+              })}
+              <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                {needs.some((n) => producers(n).length) && (
+                  <button type="button" className="btn-primary h-8" disabled={!!fetching} onClick={() => void runFirst(needs.find((n) => producers(n).length)!)}>
+                    {fetching ? `Running ${fetching}…` : `Run ${producers(needs.find((n) => producers(n).length)!)[0]} first, then send`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn h-8"
+                  onClick={() => {
+                    setNeeds(null);
+                    setLeft('params');
+                  }}
+                >
+                  I’ll pick a value
+                </button>
+                <button type="button" className="text-[12px] text-ink-muted hover:text-ink" onClick={() => void send(true)}>
+                  Send anyway
+                </button>
+              </div>
+            </div>
+          )}
+          <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            {left === 'params' && (
+              <>
+                <ParamTable tool={tool} kinds={['path', 'query', 'header']} values={values} setValues={setValues} set={set} recent={mine} onAllHistory={() => setRight('history')} />
+              </>
+            )}
+            {left === 'body' && <BodyEditor tool={tool} values={values} setValues={setValues} set={set} />}
+            {left === 'headers' && <HeadersEditor tool={tool} set={set} />}
+            {left === 'auth' && <AuthEditor tool={tool} set={set} />}
+            {left === 'flow' && <FlowEditor tool={tool} set={set} producers={producers} />}
+            {left === 'tool' && <AsTool tool={tool} set={set} issues={issues.map((i) => i.message)} />}
+            {missingSecret && refused && left !== 'tool' && left !== 'auth' && (
+              <p className="mt-3 text-[11px] text-warn">
+                The server refused ({result?.status}) and this request’s sign-in isn’t set.{' '}
+                <button className="underline" onClick={() => setLeft('auth')}>
+                  Set it in Auth
+                </button>
+              </p>
+            )}
+          </div>
         </div>
-      </div>
 
-      {/* Response */}
-      <Splitter width={resW} setWidth={setResW} side="right" initial={560} />
-      <div className="flex min-w-[320px] shrink-0 flex-col" style={{ width: resW }}>
-        <div className="flex h-[53px] shrink-0 items-center gap-3 border-b border-rule px-3 text-[12px]">
-          {result && !result.error ? (
-            <>
+        {/* Response */}
+        <Splitter width={resW} setWidth={setResW} side="right" initial={560} />
+        <div className="flex min-w-[320px] shrink-0 flex-col" style={{ width: resW }}>
+          {result && !result.error && (
+            <div className="flex h-10 shrink-0 items-center gap-3 border-b border-rule px-3 text-[12px]">
               <span className={`rounded px-2 py-0.5 font-mono font-semibold ${result.ok ? 'bg-good/15 text-good' : 'bg-bad/15 text-bad'}`}>
                 {result.status} {result.statusText}
               </span>
@@ -1003,238 +1057,212 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
                 </button>
               )}
               <AddToTest tool={tool} body={result.full ?? result.body} />
-            </>
-          ) : (
-            <span className="text-[12px] text-ink-faint">Response</span>
-          )}
-        </div>
-        <SubTabs
-          tabs={[
-            { id: 'body', label: 'Body' },
-            {
-              id: 'headers',
-              label: `Headers${resHeaders.length ? ` ${resHeaders.length}` : ''}`,
-            },
-            { id: 'timeline', label: 'Timeline' },
-            {
-              id: 'history',
-              label: `History${mine.length ? ` ${mine.length}` : ''}`,
-            },
-          ]}
-          value={right}
-          onChange={setRight}
-        />
-        <div className="min-h-0 flex-1 overflow-auto p-3">
-          {result && (result.status === 401 || result.status === 403) && env && (env.browserSession || env.auth.type === 'login' || env.auth.type === 'via') ? (
-            <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">
-              <span className="min-w-0 flex-1">{result.hint ?? `Refused (${result.status}) — the sign-in for ${env.name} may have run out.`}</span>
-              <RenewButton path={path!} env={env.name} onDone={() => void send()} label="Sign in again and resend" />
             </div>
-          ) : (
-            result?.hint && <p className="mb-3 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">{result.hint}</p>
           )}
-          {right === 'body' &&
-            (!result ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
-                <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 text-accent">
-                  <Icon name="send" size={20} />
-                </span>
-                <div className="text-[14px] font-medium">Send it to see what comes back</div>
-                <div className="max-w-xs text-[12px] leading-relaxed text-ink-muted">The response shows here exactly as an agent will get it — then keep values from it, or make it a tool.</div>
-                <div className="flex items-center gap-2 text-[12px] text-ink-muted">
-                  <kbd className="rounded border border-rule-strong bg-surface px-1.5 py-0.5 font-mono text-[11px]">⌘</kbd>
-                  <kbd className="rounded border border-rule-strong bg-surface px-1.5 py-0.5 font-mono text-[11px]">↵</kbd>
-                  <span>to send</span>
-                </div>
+          <SubTabs
+            tabs={[
+              { id: 'body', label: 'Body' },
+              {
+                id: 'headers',
+                label: `Headers${resHeaders.length ? ` ${resHeaders.length}` : ''}`,
+              },
+              { id: 'timeline', label: 'Timeline' },
+              {
+                id: 'history',
+                label: `History${mine.length ? ` ${mine.length}` : ''}`,
+              },
+            ]}
+            value={right}
+            onChange={setRight}
+          />
+          <div className="min-h-0 flex-1 overflow-auto p-3">
+            {result && (result.status === 401 || result.status === 403) && env && (env.browserSession || env.auth.type === 'login' || env.auth.type === 'via') ? (
+              <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">
+                <span className="min-w-0 flex-1">{result.hint ?? `Refused (${result.status}) — the sign-in for ${env.name} may have run out.`}</span>
+                <RenewButton path={path!} env={env.name} onDone={() => void send()} label="Sign in again and resend" />
               </div>
-            ) : result.error ? (
-              <div className="selectable rounded-lg bg-bad/10 p-3 text-[12px] text-bad">{result.error}</div>
             ) : (
-              <div className="space-y-3">
-                {!tool.enabled && result.ok && (
-                  <div className="flex items-center gap-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5 text-[12px]">
-                    <Icon name="sparkle" size={16} className="shrink-0 text-accent" />
-                    <span className="flex-1">
-                      <b>This request works.</b> Make it a tool and agents can call it — overapi drafts the description from this response.
-                    </span>
-                    <button
-                      className="btn-primary shrink-0"
-                      onClick={() => {
-                        set((t) => ({
-                          ...t,
-                          enabled: true,
-                          description: t.description.trim() ? t.description : draftDescription(t, result.body ?? ''),
-                        }));
-                        setLeft('tool');
+              result?.hint && <p className="mb-3 rounded-lg bg-warn/10 px-3 py-2 text-[12px] text-warn">{result.hint}</p>
+            )}
+            {right === 'body' &&
+              (!result ? (
+                <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
+                  <span className="flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/10 text-accent">
+                    <Icon name="send" size={20} />
+                  </span>
+                  <div className="text-[14px] font-medium">Send it to see what comes back</div>
+                  <div className="max-w-xs text-[12px] leading-relaxed text-ink-muted">The response shows here exactly as an agent will get it — then keep values from it, or make it a tool.</div>
+                  <div className="flex items-center gap-2 text-[12px] text-ink-muted">
+                    <kbd className="rounded border border-rule-strong bg-surface px-1.5 py-0.5 font-mono text-[11px]">⌘</kbd>
+                    <kbd className="rounded border border-rule-strong bg-surface px-1.5 py-0.5 font-mono text-[11px]">↵</kbd>
+                    <span>to send</span>
+                  </div>
+                </div>
+              ) : result.error ? (
+                <div className="selectable rounded-lg bg-bad/10 p-3 text-[12px] text-bad">{result.error}</div>
+              ) : (
+                <div className="space-y-3">
+                  {!tool.enabled && result.ok && (
+                    <div className="flex items-center gap-3 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2.5 text-[12px]">
+                      <Icon name="sparkle" size={16} className="shrink-0 text-accent" />
+                      <span className="flex-1">
+                        <b>This request works.</b> Make it a tool and agents can call it — overapi drafts the description from this response.
+                      </span>
+                      <button
+                        className="btn-primary shrink-0"
+                        onClick={() => {
+                          set((t) => ({
+                            ...t,
+                            enabled: true,
+                            description: t.description.trim() ? t.description : draftDescription(t, result.body ?? ''),
+                          }));
+                          setLeft('tool');
+                        }}
+                      >
+                        Make it a tool
+                      </button>
+                    </div>
+                  )}
+                  {result.request && <SentLine req={result.request} />}
+                  {result.captured && Object.keys(result.captured).length > 0 && (
+                    <div className="flex items-center gap-2 rounded-lg bg-good/10 px-3 py-2 text-[12px] text-good">
+                      <Icon name="check" size={13} />
+                      Kept{' '}
+                      {Object.keys(result.captured)
+                        .map((n) => `{{${n}}}`)
+                        .join(', ')}{' '}
+                      for the requests after this one.
+                    </div>
+                  )}
+                  {keeping && (
+                    <form
+                      className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-[12px]"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(keeping.capture.var)) keep(keeping.capture, keeping.value);
                       }}
                     >
-                      Make it a tool
-                    </button>
-                  </div>
-                )}
-                {result.request && <SentLine req={result.request} />}
-                {result.captured && Object.keys(result.captured).length > 0 && (
-                  <div className="flex items-center gap-2 rounded-lg bg-good/10 px-3 py-2 text-[12px] text-good">
-                    <Icon name="check" size={13} />
-                    Kept{' '}
-                    {Object.keys(result.captured)
-                      .map((n) => `{{${n}}}`)
-                      .join(', ')}{' '}
-                    for the requests after this one.
-                  </div>
-                )}
-                {keeping && (
-                  <form
-                    className="flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2 text-[12px]"
-                    onSubmit={(e) => {
-                      e.preventDefault();
-                      if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(keeping.capture.var)) keep(keeping.capture, keeping.value);
-                    }}
-                  >
-                    <span>
-                      Keep <span className="font-mono">{keeping.capture.path}</span> as
-                    </span>
-                    <span className="font-mono text-ink-faint">{'{{'}</span>
-                    <input
-                      autoFocus
-                      className="field w-40 py-0.5 font-mono text-[12px]"
-                      value={keeping.capture.var}
-                      onChange={(e) =>
+                      <span>
+                        Keep <span className="font-mono">{keeping.capture.path}</span> as
+                      </span>
+                      <span className="font-mono text-ink-faint">{'{{'}</span>
+                      <input
+                        autoFocus
+                        className="field w-40 py-0.5 font-mono text-[12px]"
+                        value={keeping.capture.var}
+                        onChange={(e) =>
+                          setKeeping({
+                            ...keeping,
+                            capture: {
+                              ...keeping.capture,
+                              var: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '_'),
+                            },
+                          })
+                        }
+                      />
+                      <span className="font-mono text-ink-faint">{'}}'}</span>
+                      <button className="btn-primary">Keep</button>
+                      <button type="button" className="text-ink-muted" onClick={() => setKeeping(null)}>
+                        Cancel
+                      </button>
+                    </form>
+                  )}
+                  {result.truncated && result.full && (
+                    <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-warn/10 px-3 py-1.5 text-[12px]">
+                      <span className="flex-1 text-ink-muted">
+                        {asAgent ? (
+                          <>Showing what an agent gets: the first {(result.body ?? '').split('\n…')[0].length.toLocaleString()} characters, then a note that it was cut.</>
+                        ) : (
+                          <>The whole response, {sizeText(result.bytes)}. Agents get only the first part — raise the limit under Tool, or narrow the request.</>
+                        )}
+                      </span>
+                      <button className="btn !px-2 !py-0.5 text-[11px]" onClick={() => setAsAgent((x) => !x)}>
+                        {asAgent ? 'Show the whole response' : 'Show what the agent gets'}
+                      </button>
+                    </div>
+                  )}
+                  {(hasList || canChart) && !asAgent && (
+                    <div className="mb-2 flex items-center gap-2">
+                      <div className="inline-flex rounded-md border border-rule-strong bg-canvas p-0.5 text-[11.5px]">
+                        {([...(hasList ? (['table'] as const) : []), ...(canChart ? (['chart'] as const) : []), 'json'] as const).map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setView(v)}
+                            className={`rounded px-2.5 py-0.5 ${view === v ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}
+                          >
+                            {v === 'table' ? 'Table' : v === 'chart' ? 'Chart' : 'JSON'}
+                          </button>
+                        ))}
+                      </div>
+                      {view === 'table' && <span className="text-[11px] text-ink-faint">Click a row for all of it · switch to JSON to keep a value</span>}
+                    </div>
+                  )}
+                  {canChart && !asAgent && view === 'chart' ? (
+                    <ResponseChart json={parsed} prefer={sortedBy} />
+                  ) : hasList && !asAgent && view === 'table' ? (
+                    <ResponseTable json={parsed} prefer={sortedBy} />
+                  ) : (
+                    <JsonView
+                      text={(asAgent ? result.body : (result.full ?? result.body)) ?? ''}
+                      onKeep={(segs, v) =>
                         setKeeping({
-                          ...keeping,
                           capture: {
-                            ...keeping.capture,
-                            var: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '_'),
+                            var: suggestName(segs),
+                            from: 'body',
+                            path: formatPath(segs),
                           },
+                          value: typeof v === 'object' ? JSON.stringify(v) : String(v),
                         })
                       }
                     />
-                    <span className="font-mono text-ink-faint">{'}}'}</span>
-                    <button className="btn-primary">Keep</button>
-                    <button type="button" className="text-ink-muted" onClick={() => setKeeping(null)}>
-                      Cancel
-                    </button>
-                  </form>
-                )}
-                {result.truncated && result.full && (
-                  <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg bg-warn/10 px-3 py-1.5 text-[12px]">
-                    <span className="flex-1 text-ink-muted">
-                      {asAgent ? (
-                        <>Showing what an agent gets: the first {(result.body ?? '').split('\n…')[0].length.toLocaleString()} characters, then a note that it was cut.</>
-                      ) : (
-                        <>The whole response, {sizeText(result.bytes)}. Agents get only the first part — raise the limit under Tool, or narrow the request.</>
-                      )}
-                    </span>
-                    <button className="btn !px-2 !py-0.5 text-[11px]" onClick={() => setAsAgent((x) => !x)}>
-                      {asAgent ? 'Show the whole response' : 'Show what the agent gets'}
-                    </button>
-                  </div>
-                )}
-                {(hasList || canChart) && !asAgent && (
-                  <div className="mb-2 flex items-center gap-2">
-                    <div className="inline-flex rounded-md border border-rule-strong bg-canvas p-0.5 text-[11.5px]">
-                      {([...(hasList ? (['table'] as const) : []), ...(canChart ? (['chart'] as const) : []), 'json'] as const).map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() => setView(v)}
-                          className={`rounded px-2.5 py-0.5 ${view === v ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}
-                        >
-                          {v === 'table' ? 'Table' : v === 'chart' ? 'Chart' : 'JSON'}
-                        </button>
-                      ))}
-                    </div>
-                    {view === 'table' && <span className="text-[11px] text-ink-faint">Click a row for all of it · switch to JSON to keep a value</span>}
-                  </div>
-                )}
-                {canChart && !asAgent && view === 'chart' ? (
-                  <ResponseChart json={parsed} prefer={sortedBy} />
-                ) : hasList && !asAgent && view === 'table' ? (
-                  <ResponseTable json={parsed} prefer={sortedBy} />
-                ) : (
-                  <JsonView
-                    text={(asAgent ? result.body : (result.full ?? result.body)) ?? ''}
-                    onKeep={(segs, v) =>
-                      setKeeping({
-                        capture: {
-                          var: suggestName(segs),
-                          from: 'body',
-                          path: formatPath(segs),
-                        },
-                        value: typeof v === 'object' ? JSON.stringify(v) : String(v),
-                      })
-                    }
-                  />
-                )}
-              </div>
-            ))}
-          {right === 'headers' &&
-            (resHeaders.length ? (
-              <table className="w-full text-[12px]">
-                <tbody>
-                  {resHeaders.map(([k, v]) => (
-                    <tr key={k} className="group border-b border-rule last:border-b-0">
-                      <td className="w-[38%] py-1.5 pr-3 align-top font-mono text-sky-700 dark:text-sky-300">{k}</td>
-                      <td className="selectable break-all py-1.5 font-mono text-ink-muted">{v}</td>
-                      <td className="w-14 py-1.5 text-right align-top">
-                        <button
-                          className="rounded border border-accent/40 px-1 text-[10px] text-accent opacity-0 hover:bg-accent/10 group-hover:opacity-100"
-                          title="Keep this header's value for later requests"
-                          onClick={() => {
-                            setKeeping({
-                              capture: {
-                                var: k.replace(/[^A-Za-z0-9_]/g, '_'),
-                                from: 'header',
-                                path: k,
-                              },
-                              value: v,
-                            });
-                            setRight('body');
-                          }}
-                        >
-                          {'{{ }}'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            ) : (
-              <Empty>Send the request to see the response headers.</Empty>
-            ))}
-          {right === 'timeline' &&
-            (result?.request ? (
-              <div className="space-y-3 font-mono text-[11px] leading-relaxed">
-                <div>
-                  <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">→ Request</div>
-                  <div className="selectable rounded-lg border border-rule bg-wash p-3">
-                    <div className="font-semibold text-ink">
-                      {result.request.method} {result.request.url}
-                    </div>
-                    {Object.entries(result.request.headers).map(([k, v]) => (
-                      <div key={k} className="break-all">
-                        <span className="text-sky-700 dark:text-sky-300">{k}</span>
-                        <span className="text-ink-faint">: </span>
-                        <span className="text-ink-muted">{v}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {result.request.body && (
-                    <div className="mt-2 font-sans">
-                      <JsonView text={result.request.body} compact />
-                    </div>
                   )}
                 </div>
-                {!result.error && (
+              ))}
+            {right === 'headers' &&
+              (resHeaders.length ? (
+                <table className="w-full text-[12px]">
+                  <tbody>
+                    {resHeaders.map(([k, v]) => (
+                      <tr key={k} className="group border-b border-rule last:border-b-0">
+                        <td className="w-[38%] py-1.5 pr-3 align-top font-mono text-sky-700 dark:text-sky-300">{k}</td>
+                        <td className="selectable break-all py-1.5 font-mono text-ink-muted">{v}</td>
+                        <td className="w-14 py-1.5 text-right align-top">
+                          <button
+                            className="rounded border border-accent/40 px-1 text-[10px] text-accent opacity-0 hover:bg-accent/10 group-hover:opacity-100"
+                            title="Keep this header's value for later requests"
+                            onClick={() => {
+                              setKeeping({
+                                capture: {
+                                  var: k.replace(/[^A-Za-z0-9_]/g, '_'),
+                                  from: 'header',
+                                  path: k,
+                                },
+                                value: v,
+                              });
+                              setRight('body');
+                            }}
+                          >
+                            {'{{ }}'}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <Empty>Send the request to see the response headers.</Empty>
+              ))}
+            {right === 'timeline' &&
+              (result?.request ? (
+                <div className="space-y-3 font-mono text-[11px] leading-relaxed">
                   <div>
-                    <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
-                      ← Response · {result.durationMs} ms · {sizeText(result.bytes)}
-                    </div>
+                    <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">→ Request</div>
                     <div className="selectable rounded-lg border border-rule bg-wash p-3">
-                      <div className={`font-semibold ${result.ok ? 'text-good' : 'text-bad'}`}>
-                        {result.status} {result.statusText}
+                      <div className="font-semibold text-ink">
+                        {result.request.method} {result.request.url}
                       </div>
-                      {resHeaders.map(([k, v]) => (
+                      {Object.entries(result.request.headers).map(([k, v]) => (
                         <div key={k} className="break-all">
                           <span className="text-sky-700 dark:text-sky-300">{k}</span>
                           <span className="text-ink-faint">: </span>
@@ -1242,44 +1270,68 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
                         </div>
                       ))}
                     </div>
+                    {result.request.body && (
+                      <div className="mt-2 font-sans">
+                        <JsonView text={result.request.body} compact />
+                      </div>
+                    )}
                   </div>
-                )}
-                <p className="font-sans text-[11px] text-ink-faint">Secrets are shown as •••.</p>
-              </div>
-            ) : (
-              <Empty>Send the request to see exactly what went out and what came back.</Empty>
-            ))}
-          {right === 'history' &&
-            (mine.length === 0 ? (
-              <Empty>No calls yet.</Empty>
-            ) : (
-              <>
-                <LatencyTrend entries={mine} />
-                <ul className="space-y-0.5">
-                  {collapseRuns(mine).map(({ h, n }) => (
-                    <li key={h.id}>
-                      <button
-                        className="group flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-wash-strong"
-                        title="Use these values"
-                        onClick={() => {
-                          setValues(Object.fromEntries(Object.entries(h.args).map(([k, v]) => [k, toText(v)])));
-                          setLeft('params');
-                        }}
-                      >
-                        <span className={`w-9 shrink-0 font-mono font-semibold ${h.ok ? 'text-good' : 'text-bad'}`}>{h.status ?? 'ERR'}</span>
-                        <EnvChip name={h.env} />
-                        <span className="min-w-0 flex-1">
-                          <ArgChips args={h.args} max={4} />
-                        </span>
-                        {n > 1 && <span className="shrink-0 rounded-full bg-wash-strong px-1.5 text-[10.5px] font-semibold tabular-nums text-ink-muted">×{n}</span>}
-                        <span className="shrink-0 text-[10.5px] text-ink-faint group-hover:hidden">{ago(h.at)}</span>
-                        <span className="hidden shrink-0 text-[10.5px] text-accent group-hover:inline">Use these →</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </>
-            ))}
+                  {!result.error && (
+                    <div>
+                      <div className="mb-1 font-sans text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">
+                        ← Response · {result.durationMs} ms · {sizeText(result.bytes)}
+                      </div>
+                      <div className="selectable rounded-lg border border-rule bg-wash p-3">
+                        <div className={`font-semibold ${result.ok ? 'text-good' : 'text-bad'}`}>
+                          {result.status} {result.statusText}
+                        </div>
+                        {resHeaders.map(([k, v]) => (
+                          <div key={k} className="break-all">
+                            <span className="text-sky-700 dark:text-sky-300">{k}</span>
+                            <span className="text-ink-faint">: </span>
+                            <span className="text-ink-muted">{v}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <p className="font-sans text-[11px] text-ink-faint">Secrets are shown as •••.</p>
+                </div>
+              ) : (
+                <Empty>Send the request to see exactly what went out and what came back.</Empty>
+              ))}
+            {right === 'history' &&
+              (mine.length === 0 ? (
+                <Empty>No calls yet.</Empty>
+              ) : (
+                <>
+                  <LatencyTrend entries={mine} />
+                  <ul className="space-y-0.5">
+                    {collapseRuns(mine).map(({ h, n }) => (
+                      <li key={h.id}>
+                        <button
+                          className="group flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-wash-strong"
+                          title="Use these values"
+                          onClick={() => {
+                            setValues(Object.fromEntries(Object.entries(h.args).map(([k, v]) => [k, toText(v)])));
+                            setLeft('params');
+                          }}
+                        >
+                          <span className={`w-9 shrink-0 font-mono font-semibold ${h.ok ? 'text-good' : 'text-bad'}`}>{h.status ?? 'ERR'}</span>
+                          <EnvChip name={h.env} />
+                          <span className="min-w-0 flex-1">
+                            <ArgChips args={h.args} max={4} />
+                          </span>
+                          {n > 1 && <span className="shrink-0 rounded-full bg-wash-strong px-1.5 text-[10.5px] font-semibold tabular-nums text-ink-muted">×{n}</span>}
+                          <span className="shrink-0 text-[10.5px] text-ink-faint group-hover:hidden">{ago(h.at)}</span>
+                          <span className="hidden shrink-0 text-[10.5px] text-accent group-hover:inline">Use these →</span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ))}
+          </div>
         </div>
       </div>
     </div>
@@ -1776,7 +1828,10 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
           onClick={() =>
             set((t) => {
               const at = bestPath(t.returns, 'id') ?? 'id';
-              return { ...t, captures: [...(t.captures ?? []), { var: 'id', from: 'body', path: at }] };
+              return {
+                ...t,
+                captures: [...(t.captures ?? []), { var: 'id', from: 'body', path: at }],
+              };
             })
           }
         >
@@ -1952,10 +2007,30 @@ export function titleOf(t: ToolDef): string {
 /// One colour per group, the same above (its card) and below (its chips),
 /// so where a param lands is plain.
 const TONE: Record<string, { card: string; label: string; dot: string; chip: string }> = {
-  Needed: { card: 'border-amber-500/30 bg-amber-500/[0.06]', label: 'text-amber-700 dark:text-amber-300', dot: 'bg-amber-500', chip: 'border-amber-500/50 hover:bg-amber-500/10' },
-  'Filter by': { card: 'border-sky-500/30 bg-sky-500/[0.06]', label: 'text-sky-700 dark:text-sky-300', dot: 'bg-sky-500', chip: 'border-sky-500/50 hover:bg-sky-500/10' },
-  Switches: { card: 'border-teal-500/30 bg-teal-500/[0.06]', label: 'text-teal-700 dark:text-teal-300', dot: 'bg-teal-500', chip: 'border-teal-500/50 hover:bg-teal-500/10' },
-  Paging: { card: 'border-violet-500/30 bg-violet-500/[0.06]', label: 'text-violet-700 dark:text-violet-300', dot: 'bg-violet-500', chip: 'border-violet-500/50 hover:bg-violet-500/10' },
+  Needed: {
+    card: 'border-amber-500/30 bg-amber-500/[0.06]',
+    label: 'text-amber-700 dark:text-amber-300',
+    dot: 'bg-amber-500',
+    chip: 'border-amber-500/50 hover:bg-amber-500/10',
+  },
+  'Filter by': {
+    card: 'border-sky-500/30 bg-sky-500/[0.06]',
+    label: 'text-sky-700 dark:text-sky-300',
+    dot: 'bg-sky-500',
+    chip: 'border-sky-500/50 hover:bg-sky-500/10',
+  },
+  Switches: {
+    card: 'border-teal-500/30 bg-teal-500/[0.06]',
+    label: 'text-teal-700 dark:text-teal-300',
+    dot: 'bg-teal-500',
+    chip: 'border-teal-500/50 hover:bg-teal-500/10',
+  },
+  Paging: {
+    card: 'border-violet-500/30 bg-violet-500/[0.06]',
+    label: 'text-violet-700 dark:text-violet-300',
+    dot: 'bg-violet-500',
+    chip: 'border-violet-500/50 hover:bg-violet-500/10',
+  },
 };
 
 const PAGING = /^(page|page_?number|page_?size|per_?page|size|limit|offset|cursor|sort|sort_?by|order|order_?by|direction|start|count)$/i;
@@ -1999,6 +2074,19 @@ function ParamTable({
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [fresh, setFresh] = useState<string | null>(null);
   const [q, setQ] = useState('');
+  const { project, update, selectTool, say } = useStore();
+  // Where each argument can come from: the request that answers with it.
+  const forArgs = kinds.includes('path') || kinds.includes('query');
+  const links = useMemo(() => (project && forArgs ? findLinks(project).filter((l) => l.to === tool.id) : []), [project, forArgs, tool.id]);
+  const titleFor = (l?: Link) => {
+    const t = l && project?.tools.find((x) => x.id === l.from);
+    return t ? titleOf(t) : l?.fromName;
+  };
+  const connect = (l: Link) => {
+    update((x) => applyLinks(x, [l]));
+    setValues((v) => ({ ...v, [l.param]: `{{${l.param}}}` }));
+    say(`${l.param} now comes from ${titleFor(l)}: the first one it returns. Agents are told the same.`);
+  };
   const rows = tool.params.map((prm, i) => ({ prm, i })).filter(({ prm }) => kinds.includes(prm.in));
   const setParam = (i: number, patch: Partial<ParamDef>) =>
     set((t) => ({
@@ -2114,35 +2202,63 @@ function ParamTable({
           <div className="space-y-2">
             {groupsOf(sending)
               .filter(([, list]) => list.length)
-              .map(([label, list]) => (
-                <div key={label} className={`overflow-hidden rounded-lg border ${TONE[label].card}`}>
-                  <div className={`flex items-center gap-1.5 px-3 pb-0.5 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] ${TONE[label].label}`}>
-                    <span className={`h-1.5 w-1.5 rounded-full ${TONE[label].dot}`} />
-                    {label}
-                    <span className="font-normal normal-case tracking-normal opacity-70">{list.length}</span>
+              .map(([label, list]) => {
+                // Colour says something's missing; a Needed group that's all set goes quiet.
+                const done = label === 'Needed' && list.every(({ prm }) => (values[prm.name] ?? '').trim());
+                return (
+                  <div key={label} className={`rounded-lg border ${done ? 'border-good/15 bg-good/[0.03]' : TONE[label].card}`}>
+                    <div className={`flex items-center gap-1.5 px-3 pb-0.5 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] ${done ? 'text-ink-faint' : TONE[label].label}`}>
+                      {done ? (
+                        <svg
+                          aria-hidden="true"
+                          width="11"
+                          height="11"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          className="text-good"
+                        >
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                      ) : (
+                        <span className={`h-1.5 w-1.5 rounded-full ${TONE[label].dot}`} />
+                      )}
+                      {label}
+                      <span className="font-normal normal-case tracking-normal opacity-70">{list.length}</span>
+                    </div>
+                    {list.map(({ prm, i }) => (
+                      <ParamRow
+                        key={`${prm.in}:${prm.name}`}
+                        toolId={tool.id}
+                        prm={prm}
+                        autoFocus={fresh === prm.name}
+                        value={values[prm.name] ?? ''}
+                        onValue={(v) => setValues((s) => ({ ...s, [prm.name]: v }))}
+                        onChange={(patch) => setParam(i, patch)}
+                        source={links.find((l) => l.param === prm.name)}
+                        sourceTitle={titleFor(links.find((l) => l.param === prm.name))}
+                        onConnect={connect}
+                        onOpenSource={selectTool}
+                        onUnsend={prm.in === 'path' || prm.required ? undefined : () => drop(prm.name)}
+                        onDelete={
+                          prm.in === 'path'
+                            ? undefined
+                            : () => {
+                                drop(prm.name);
+                                set((t) => ({
+                                  ...t,
+                                  params: t.params.filter((_, j) => j !== i),
+                                }));
+                              }
+                        }
+                      />
+                    ))}
                   </div>
-                  {list.map(({ prm, i }) => (
-                    <ParamRow
-                      key={`${prm.in}:${prm.name}`}
-                      toolId={tool.id}
-                      prm={prm}
-                      autoFocus={fresh === prm.name}
-                      value={values[prm.name] ?? ''}
-                      onValue={(v) => setValues((s) => ({ ...s, [prm.name]: v }))}
-                      onChange={(patch) => setParam(i, patch)}
-                      onUnsend={prm.in === 'path' || prm.required ? undefined : () => drop(prm.name)}
-                      onDelete={
-                        prm.in === 'path'
-                          ? undefined
-                          : () => {
-                              drop(prm.name);
-                              set((t) => ({ ...t, params: t.params.filter((_, j) => j !== i) }));
-                            }
-                      }
-                    />
-                  ))}
-                </div>
-              ))}
+                );
+              })}
           </div>
         )}
       </section>
@@ -2191,7 +2307,18 @@ function ParamTable({
             e.preventDefault();
             const name = adding.name.trim();
             if (!name || tool.params.some((x) => x.name === name)) return;
-            set((t) => ({ ...t, params: [...t.params, { name, in: adding.in, required: false, schema: { type: 'string' } }] }));
+            set((t) => ({
+              ...t,
+              params: [
+                ...t.params,
+                {
+                  name,
+                  in: adding.in,
+                  required: false,
+                  schema: { type: 'string' },
+                },
+              ],
+            }));
             add(name);
             setAdding(null);
           }}
@@ -2209,7 +2336,15 @@ function ParamTable({
           </button>
         </form>
       ) : (
-        <button className="text-[12px] text-ink-muted hover:text-accent" onClick={() => setAdding({ name: '', in: kinds.includes('body') ? 'body' : 'query' })}>
+        <button
+          className="text-[12px] text-ink-muted hover:text-accent"
+          onClick={() =>
+            setAdding({
+              name: '',
+              in: kinds.includes('body') ? 'body' : 'query',
+            })
+          }
+        >
           + A {noun} this request doesn’t list yet
         </button>
       )}
@@ -2271,7 +2406,10 @@ function Chips({ value, onValue, autoFocus, toolId, param }: { value: string; on
     if (!toolId || !param || !path || !project || !env) return;
     const r = await window.overapi.invoke('seen:suggest', path, project, toolId, param, env);
     setSeen(r);
-    setLabels((l) => ({ ...l, ...Object.fromEntries(r.values.filter((x) => x.label).map((x) => [String(x.v), x.label!])) }));
+    setLabels((l) => ({
+      ...l,
+      ...Object.fromEntries(r.values.filter((x) => x.label).map((x) => [String(x.v), x.label!])),
+    }));
   };
   const q = draft.trim().toLowerCase();
   const offers = (seen?.values ?? []).filter((x) => !items.includes(String(x.v)) && (!q || String(x.v).toLowerCase().includes(q) || x.label?.toLowerCase().includes(q))).slice(0, 30);
@@ -2439,16 +2577,10 @@ function Stepper({ value, onValue, autoFocus }: { value: string; onValue: (v: st
 /// What a {{variable}} in a param stands for right now, and where it came
 /// from — so a value found by an earlier request is visible, not magic.
 function KeptValue({ value }: { value: string }): JSX.Element | null {
-  const { runtime, project, env: envName } = useStore();
-  const m = value.trim().match(/^\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}$/);
-  if (!m) return null;
-  const kept = runtime.find((r) => r.name === m[1]);
-  const fromEnv = project?.envs.find((e) => e.name === envName)?.vars?.[m[1]];
-  if (!kept && fromEnv === undefined) return null;
-  const ago = (at: string) => {
-    const s = Math.round((Date.now() - new Date(at).getTime()) / 1000);
-    return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
-  };
+  const k = useKept(value);
+  if (!k || k.resolved === undefined) return null;
+  const { kept, fromEnv, envName } = k;
+  const ago = keptAgo;
   return (
     <div className="flex items-center gap-1.5 px-1 text-[11.5px]">
       <span className="text-good">=</span>
@@ -2469,6 +2601,10 @@ function ParamRow({
   onUnsend,
   onDelete,
   autoFocus,
+  source,
+  sourceTitle,
+  onConnect,
+  onOpenSource,
 }: {
   toolId?: string;
   prm: ParamDef;
@@ -2478,15 +2614,24 @@ function ParamRow({
   onUnsend?: () => void;
   onDelete?: () => void;
   autoFocus?: boolean;
+  /// The request that gives this value, if one does.
+  source?: Link;
+  sourceTitle?: string;
+  onConnect?: (l: Link) => void;
+  onOpenSource?: (toolId: string) => void;
 }): JSX.Element {
   const t = Array.isArray(prm.schema.type) ? prm.schema.type[0] : prm.schema.type;
   const kind = kindOf(prm);
   const optional = prm.in !== 'path' && !prm.required;
+  const linked = !!source && !!toolId && (kind === 'id' || kind === 'text');
   const about = prm.description ?? prm.schema.description;
   const [open, setOpen] = useState(false);
   const control = (() => {
     if (kind === 'choice') {
-      const opts = (prm.schema.enum ?? []).map((v) => ({ v: String(v), label: String(v) }));
+      const opts = (prm.schema.enum ?? []).map((v) => ({
+        v: String(v),
+        label: String(v),
+      }));
       if (opts.length <= 5) return <Segmented options={[...(optional ? [{ v: '', label: 'any' }] : []), ...opts]} value={value} onValue={onValue} />;
       return (
         <select autoFocus={autoFocus} className="field py-1 text-[12px]" value={value} onChange={(e) => onValue(e.target.value)}>
@@ -2513,7 +2658,7 @@ function ParamRow({
   })();
   return (
     <div
-      className={`group grid grid-cols-[minmax(130px,180px)_minmax(0,1fr)_44px] items-start gap-x-3 border-b border-rule px-3 py-[7px] last:border-b-0 focus-within:bg-accent/[0.035] ${open ? 'bg-accent/[0.04]' : ''}`}
+      className={`group grid grid-cols-[minmax(130px,180px)_minmax(0,1fr)_44px] items-start gap-x-3 border-b border-rule px-3 py-[7px] last:rounded-b-lg last:border-b-0 focus-within:bg-accent/[0.035] ${open ? 'bg-accent/[0.04]' : ''}`}
     >
       <div className="min-w-0 pt-[5px]">
         <button
@@ -2522,6 +2667,7 @@ function ParamRow({
           title={about ? `${about}\n\nClick for details` : 'Details'}
           onClick={() => setOpen((o) => !o)}
         >
+          {(prm.in === 'path' || prm.required) && !value.trim() && <span className="mr-1.5 inline-block h-1.5 w-1.5 -translate-y-px rounded-full bg-warn" title="Needs a value" />}
           {prm.name}
         </button>
         <span className="ml-1.5 text-[10.5px] text-ink-faint">
@@ -2531,8 +2677,24 @@ function ParamRow({
         </span>
       </div>
       <div className="min-w-0 max-w-[620px] space-y-1.5">
-        {control}
-        <KeptValue value={value} />
+        {linked ? (
+          <ValuePicker
+            toolId={toolId!}
+            param={prm.name}
+            value={value}
+            onValue={onValue}
+            link={source!}
+            sourceTitle={sourceTitle ?? source!.fromName}
+            onConnect={onConnect}
+            onOpenSource={onOpenSource}
+            autoFocus={autoFocus}
+          />
+        ) : (
+          <>
+            {control}
+            <KeptValue value={value} />
+          </>
+        )}
         {open && (
           <div className="space-y-1 pb-0.5">
             <input
@@ -2546,7 +2708,14 @@ function ParamRow({
               <select
                 className="bg-transparent outline-none hover:text-ink"
                 value={t ?? ''}
-                onChange={(e) => onChange({ schema: { ...prm.schema, type: e.target.value || undefined } })}
+                onChange={(e) =>
+                  onChange({
+                    schema: {
+                      ...prm.schema,
+                      type: e.target.value || undefined,
+                    },
+                  })
+                }
                 aria-label="Type"
               >
                 {['string', 'integer', 'number', 'boolean', 'array', 'object'].map((x) => (

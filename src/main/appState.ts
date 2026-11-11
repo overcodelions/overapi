@@ -52,6 +52,8 @@ export const DEFAULT_SETTINGS: Settings = {
   aiModel: '',
   projectsDir: path.join(os.homedir(), 'overapi'),
   timeoutSec: 30,
+  autoUpdate: true,
+  updateChannel: 'stable',
   toured: false,
 };
 

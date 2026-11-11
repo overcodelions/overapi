@@ -107,6 +107,11 @@ export interface Settings {
   aiModel: string;
   projectsDir: string;
   timeoutSec: number;
+  /// Download updates in the background and install them at quit; off,
+  /// only say one exists and download when asked.
+  autoUpdate: boolean;
+  /// stable: tagged releases. beta: prereleases too.
+  updateChannel: 'stable' | 'beta';
   /// Shown once: the first-run tour.
   toured: boolean;
 }
@@ -307,10 +312,14 @@ export interface IPCInvokeMap {
   'shell:open': (url: string) => void;
   /// Restart into a downloaded update now rather than at the next quit.
   'update:install': () => void;
+  /// Looks for an update now, on the chosen channel.
+  'update:check': () => { ok: true; available: boolean; version?: string } | { ok: false; error: string };
+  /// Downloads the update found (when automatic updates are off).
+  'update:download': () => void;
 }
 
 export type MainEvent =
-  | { type: 'update:available'; version: string }
+  | { type: 'update:available'; version: string; downloading: boolean }
   | { type: 'update:progress'; percent: number }
   | { type: 'update:downloaded'; version: string }
   | { type: 'discover:step'; text: string }

@@ -90,11 +90,14 @@ jobs:
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
+          # v1.3.0-beta.1 is a prerelease: only the beta channel takes it.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           fail_on_unmatched_files: false
           files: |
             release/*.dmg
             release/*.zip
             release/latest*.yml
+            release/beta*.yml
             release/SHA256SUMS.txt
 
   # Copies each installer to a version-free name, so a link at
