@@ -305,9 +305,14 @@ export interface IPCInvokeMap {
   'load:start': (path: string, project: Project, scenarioId: string, env: string, opts: { users: number; durationSec: number; rampSec: number }) => { ok: true; result: LoadSnapshotDto } | { ok: false; error: string };
   'load:stop': () => void;
   'shell:open': (url: string) => void;
+  /// Restart into a downloaded update now rather than at the next quit.
+  'update:install': () => void;
 }
 
 export type MainEvent =
+  | { type: 'update:available'; version: string }
+  | { type: 'update:progress'; percent: number }
+  | { type: 'update:downloaded'; version: string }
   | { type: 'discover:step'; text: string }
   | { type: 'doc:step'; text: string }
   | { type: 'ask:event'; runId: string; event: import('../main/ask').AskEvent }

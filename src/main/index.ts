@@ -21,6 +21,7 @@ import { extractSeen, seenKey, seenPath, type SeenValue } from '../shared/seen';
 import { findLinks } from '../shared/chains';
 import type { SeenSuggestions } from '../shared/ipc';
 import { nameForOrigin } from '../core/import/har';
+import { initAutoUpdater, quitAndInstall } from './updater';
 
 const serveAt = process.argv.indexOf('serve');
 const SERVE = serveAt > 0 && process.argv.slice(serveAt + 1).some((a) => a.endsWith('.json'));
@@ -1452,6 +1453,7 @@ function startApp(): void {
     handle('shell:open', (url) => {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     });
+    handle('update:install', () => quitAndInstall());
   }
 
   function createWindow(): void {
@@ -1498,6 +1500,7 @@ function startApp(): void {
     updateTray();
     await registerIpc();
     createWindow();
+    initAutoUpdater(emit);
     app.on('activate', () => {
       // A recording browser may be open; overapi's own window is what's missing.
       if (!win) createWindow();
