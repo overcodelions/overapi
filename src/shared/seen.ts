@@ -22,10 +22,13 @@ const OWN_ID = /^(id|_id|uuid|slug|key|code)$/i;
 const MAX = 50;
 const ENUM_MAX = 12;
 
+/// Text that is itself an id (a uuid, a long hex key) — no use as a name.
+export const looksLikeId = (v: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v.trim()) || /^[0-9a-f]{16,}$/i.test(v.trim());
+
 const labelOf = (obj: Record<string, unknown>, own: string): string | undefined => {
   for (const k of LABEL_KEYS) {
     const v = obj[k];
-    if (k !== own && typeof v === 'string' && v.trim() && v.length <= 120) return v.trim();
+    if (k !== own && typeof v === 'string' && v.trim() && v.length <= 120 && !looksLikeId(v)) return v.trim();
   }
   return undefined;
 };

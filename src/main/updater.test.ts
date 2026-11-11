@@ -45,16 +45,16 @@ const { autoUpdater } = vi.hoisted(() => ({
 
 vi.mock('electron-updater', () => ({ autoUpdater }));
 
-import { initAutoUpdater } from './updater';
+import { applyUpdatePrefs, initAutoUpdater } from './updater';
 
-function init(opts: { version: string; packaged?: boolean }) {
+function init(opts: { version: string; packaged?: boolean; autoUpdate?: boolean; updateChannel?: 'stable' | 'beta' }) {
   version = opts.version;
   isPackaged = opts.packaged ?? true;
   autoUpdater.allowPrerelease = true;
   autoUpdater.allowDowngrade = false;
   autoUpdater.autoDownload = false;
   autoUpdater.on.mockClear();
-  initAutoUpdater(() => {});
+  initAutoUpdater(() => {}, { autoUpdate: opts.autoUpdate ?? true, updateChannel: opts.updateChannel ?? 'stable' });
 }
 
 describe('auto-updater', () => {
@@ -67,6 +67,29 @@ describe('auto-updater', () => {
     expect(autoUpdater.autoDownload).toBe(true);
     expect(autoUpdater.allowPrerelease).toBe(false);
     expect(autoUpdater.allowDowngrade).toBe(false);
+  });
+
+  // The channel is assigned (so beta skips the `nightly` tag); the setter's
+  // downgrade side effect must still end up off.
+  it('takes prereleases on beta, still never downgrading', () => {
+    init({ version: '0.2.0', updateChannel: 'beta' });
+    expect(autoUpdater.allowPrerelease).toBe(true);
+    expect(autoUpdater.channel).toBe('beta');
+    expect(autoUpdater.allowDowngrade).toBe(false);
+  });
+
+  it('goes back to the latest feed on stable', () => {
+    init({ version: '0.2.0', updateChannel: 'beta' });
+    applyUpdatePrefs({ autoUpdate: true, updateChannel: 'stable' });
+    expect(autoUpdater.allowPrerelease).toBe(false);
+    expect(autoUpdater.channel).toBe('latest');
+    expect(autoUpdater.allowDowngrade).toBe(false);
+  });
+
+  it('only checks, never downloads or installs, with automatic updates off', () => {
+    init({ version: '0.2.0', autoUpdate: false });
+    expect(autoUpdater.autoDownload).toBe(false);
+    expect(autoUpdater.autoInstallOnAppQuit).toBe(false);
   });
 
   it('checks shortly after launch', () => {

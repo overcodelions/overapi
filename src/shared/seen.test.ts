@@ -26,3 +26,10 @@ describe('seen values', () => {
   });
   it('reads chain paths', () => expect(seenPath('content[0].id')).toBe('content[].id'));
 });
+
+describe('labels', () => {
+  it('skips a name field that is itself an id', () => {
+    const r = extractSeen({ content: [{ id: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', name: '00000000-0000-4000-8000-000000000001', description: 'Acme resellers' }] });
+    expect(Object.values(r).flat()).toContainEqual({ v: 'a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6', label: 'Acme resellers' });
+  });
+});

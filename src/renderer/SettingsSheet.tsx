@@ -18,6 +18,8 @@ const SECTIONS: { id: Section; label: string; icon: IconName }[] = [
 export function SettingsSheet(): JSX.Element {
   const { settings, info, saveSettings, refreshInfo, openSheet } = useStore();
   const [section, setSection] = useState<Section>('general');
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<string | null>(null);
   useEffect(() => void refreshInfo(), [refreshInfo]);
   useEffect(() => {
     const k = (e: KeyboardEvent) => e.key === 'Escape' && openSheet(null);
@@ -164,6 +166,39 @@ export function SettingsSheet(): JSX.Element {
                     </div>
                   </div>
                 </div>
+                <Row title="Automatic updates" note={settings.autoUpdate ? 'Downloads in the background and installs when you quit.' : 'Tells you when there’s a new version; downloads only when you say.'}>
+                  <Segmented value={settings.autoUpdate ? 'on' : 'off'} onChange={(v) => set({ autoUpdate: v === 'on' })} options={[['on', 'On'], ['off', 'Off']]} />
+                </Row>
+                <Row
+                  title="Update channel"
+                  note={
+                    settings.updateChannel === 'beta'
+                      ? 'Betas as well as releases — newer, less tested. Going back to Stable waits for a release newer than the beta you have.'
+                      : 'Tested releases only.'
+                  }
+                >
+                  <Segmented value={settings.updateChannel} onChange={(v) => set({ updateChannel: v as Settings['updateChannel'] })} options={[['stable', 'Stable'], ['beta', 'Beta']]} />
+                </Row>
+                <Row title="Check for updates" note={checked ?? (info.packaged ? undefined : 'Updates only run in the installed app.')}>
+                  <button
+                    className="btn"
+                    disabled={checking || !info.packaged}
+                    onClick={async () => {
+                      setChecking(true);
+                      const r = await window.overapi.invoke('update:check');
+                      setChecking(false);
+                      setChecked(
+                        !r.ok
+                          ? `Couldn’t check: ${r.error}`
+                          : r.available
+                            ? `${r.version} is available${settings.autoUpdate ? ' — downloading.' : '.'}`
+                            : `You’re up to date${r.version ? ` (${r.version})` : ''}.`,
+                      );
+                    }}
+                  >
+                    {checking ? 'Checking…' : 'Check now'}
+                  </button>
+                </Row>
                 <Row title="App data" note="Settings, history and keychain references. Your APIs live in their own folders.">
                   <span className="max-w-[260px] truncate font-mono text-[11px] text-ink-muted" title={info.userData}>
                     {info.userData.replace(/^\/Users\/[^/]+/, '~')}

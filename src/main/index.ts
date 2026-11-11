@@ -21,7 +21,7 @@ import { extractSeen, seenKey, seenPath, type SeenValue } from '../shared/seen';
 import { findLinks } from '../shared/chains';
 import type { SeenSuggestions } from '../shared/ipc';
 import { nameForOrigin } from '../core/import/har';
-import { initAutoUpdater, quitAndInstall } from './updater';
+import { applyUpdatePrefs, checkNow, downloadNow, initAutoUpdater, quitAndInstall } from './updater';
 
 const serveAt = process.argv.indexOf('serve');
 const SERVE = serveAt > 0 && process.argv.slice(serveAt + 1).some((a) => a.endsWith('.json'));
@@ -167,6 +167,7 @@ function startApp(): void {
       const s = st.setSettings(patch);
       applyTheme();
       if (patch.ai) void detectTools().then((r) => (aiCache = r));
+      if (patch.autoUpdate !== undefined || patch.updateChannel !== undefined) applyUpdatePrefs(s);
       return s;
     });
     handle('settings:pickDir', async () => {
@@ -1454,6 +1455,8 @@ function startApp(): void {
       if (/^https?:\/\//.test(url)) void shell.openExternal(url);
     });
     handle('update:install', () => quitAndInstall());
+    handle('update:check', () => checkNow());
+    handle('update:download', () => downloadNow());
   }
 
   function createWindow(): void {
@@ -1500,7 +1503,7 @@ function startApp(): void {
     updateTray();
     await registerIpc();
     createWindow();
-    initAutoUpdater(emit);
+    initAutoUpdater(emit, (await import('./appState')).getSettings());
     app.on('activate', () => {
       // A recording browser may be open; overapi's own window is what's missing.
       if (!win) createWindow();
