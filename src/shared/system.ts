@@ -58,10 +58,14 @@ export function mergedNames(members: { project: Project; tools: ToolDef[] }[]): 
   const taken = new Set<string>();
   members.forEach((m, i) => {
     for (const t of m.tools) {
-      let name = (count.get(t.name) ?? 0) > 1 ? `${shortName(m.project)}_${t.name}` : t.name;
-      for (let n = 2; taken.has(name); n++) name = `${shortName(m.project)}_${t.name}_${n}`;
+      // Cut to the 64 characters MCP allows before checking it's free, and
+      // keep the _2 on the end, so two long names can't come out the same.
+      const fit = (base: string, suffix = '') => `${base.slice(0, 64 - suffix.length)}${suffix}`;
+      const base = (count.get(t.name) ?? 0) > 1 ? `${shortName(m.project)}_${t.name}` : t.name;
+      let name = fit(base);
+      for (let n = 2; taken.has(name); n++) name = fit(base, `_${n}`);
       taken.add(name);
-      out.push({ name: name.slice(0, 64), tool: t, member: i });
+      out.push({ name, tool: t, member: i });
     }
   });
   return out;

@@ -1,3 +1,4 @@
+import { isPrivateHost, PUBLIC_LOAD_LIMITS } from '@shared/network';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from './store';
 import { Empty, EnvChip, Method, SubTabs, Toggle } from './ui';
@@ -767,6 +768,7 @@ function LoadView({ sc }: { sc: Scenario }): JSX.Element {
   const [duration, setDuration] = useState(kept?.duration ?? 30);
   const [ramp, setRamp] = useState(5);
   const [okProd, setOkProd] = useState(false);
+  const [okPublic, setOkPublic] = useState(false);
   const [running, setRunning] = useState(false);
   const [snap, setSnap] = useState<LoadSnapshotDto | null>(kept?.snap ?? null);
   const [done, setDone] = useState(kept ? { at: kept.at, env: kept.env, users: kept.users, duration: kept.duration } : null);
@@ -774,6 +776,20 @@ function LoadView({ sc }: { sc: Scenario }): JSX.Element {
   /// The request whose errors are open ('' = closed on purpose; null = not chosen yet).
   const [openRow, setOpenRow] = useState<string | null>(null);
   const prod = envKind(env.name) === 'production';
+  // Not a machine you obviously run: held to a polite size, and you say you're allowed.
+  const publicHost = !isPrivateHost(env.baseUrl);
+  const host = (() => {
+    try {
+      return new URL(env.baseUrl).host;
+    } catch {
+      return env.baseUrl;
+    }
+  })();
+  useEffect(() => {
+    if (!publicHost) return;
+    if (users > PUBLIC_LOAD_LIMITS.users) setUsers(PUBLIC_LOAD_LIMITS.users);
+    if (duration > PUBLIC_LOAD_LIMITS.durationSec) setDuration(PUBLIC_LOAD_LIMITS.durationSec);
+  }, [publicHost, users, duration]);
   const reads = sc.steps.filter((s) => s.enabled && p.tools.find((t) => t.id === s.toolId)?.safety === 'read').length;
 
   useEffect(
@@ -816,8 +832,8 @@ function LoadView({ sc }: { sc: Scenario }): JSX.Element {
   return (
     <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4 text-[12px]">
       <div className="flex flex-wrap items-end gap-3">
-        <NumberField label="Users" value={users} set={setUsers} min={1} max={100} />
-        <NumberField label="Duration (s)" value={duration} set={setDuration} min={1} max={600} />
+        <NumberField label="Users" value={users} set={setUsers} min={1} max={publicHost ? PUBLIC_LOAD_LIMITS.users : 100} />
+        <NumberField label="Duration (s)" value={duration} set={setDuration} min={1} max={publicHost ? PUBLIC_LOAD_LIMITS.durationSec : 600} />
         <NumberField label="Ramp-up (s)" value={ramp} set={setRamp} min={0} max={duration} />
         <div className="pb-2 text-ink-muted">
           on <b className="text-ink">{env.name}</b> · {reads} read{reads === 1 ? '' : 's'} per loop · writes are never part of a load test
@@ -828,11 +844,23 @@ function LoadView({ sc }: { sc: Scenario }): JSX.Element {
             Stop
           </button>
         ) : (
-          <button className="btn-primary" disabled={!reads || (prod && !okProd)} onClick={() => void start()}>
+          <button className="btn-primary" disabled={!reads || (prod && !okProd) || (publicHost && !okPublic)} onClick={() => void start()}>
             {snap ? 'Run again' : 'Start load test'}
           </button>
         )}
       </div>
+      {publicHost && (
+        <label className="flex items-start gap-2.5 rounded-lg border border-warn/40 bg-warn/[0.07] p-3 leading-relaxed">
+          <input type="checkbox" className="mt-1" checked={okPublic} onChange={(e) => setOkPublic(e.target.checked)} />
+          <span>
+            <b className="text-warn">{host} is a public site.</b>{' '}
+            {env.browserSession ? 'You recorded it in a browser, which usually means it’s someone else’s site. ' : ''}
+            A load test is a burst of traffic its owners didn’t ask for — it can look like an attack, get your address blocked, or break their terms. Only test systems you run or have
+            permission to test. On a public host overapi holds it to {PUBLIC_LOAD_LIMITS.users} users for {PUBLIC_LOAD_LIMITS.durationSec} s.
+            <span className="mt-1 block font-medium text-ink">I run this system, or have permission to load test it.</span>
+          </span>
+        </label>
+      )}
       {prod && (
         <label className="flex items-start gap-2 rounded-lg border border-bad/40 bg-bad/5 p-3">
           <input type="checkbox" className="mt-0.5" checked={okProd} onChange={(e) => setOkProd(e.target.checked)} />

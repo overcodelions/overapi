@@ -16,7 +16,7 @@ const project = (): Project => ({
   version: '1',
   envs: [{ name: 'default', baseUrl: 'https://api.league.example', auth: { type: 'none' }, allowWrites: false }],
   tools: [
-    t('GET /teams', [], { returns: shapeOf({ data: [{ id: 't1', name: 'Arsenal' }] }), example: { token: 'Bearer abcdefghijklmnopqrstuvwx' } }),
+    t('GET /teams', [], { returns: shapeOf({ data: [{ id: 't1', name: 'Acme Rovers' }] }), example: { token: 'Bearer abcdefghijklmnopqrstuvwx' } }),
     t('GET /teams/{team_id}', ['team_id']),
     t('GET /metadata/SDP_TEAM/{id}', ['id']),
   ],

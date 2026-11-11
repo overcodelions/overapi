@@ -31,6 +31,8 @@ import { isIdLike } from '@shared/chains';
 import { addStep, emptyScenario, feedsFrom, paramsFor, wireInto, type Feed } from '@shared/wire';
 import type { SeenSuggestions, TryResponse } from '@shared/ipc';
 import { JsonView, parseMaybeJson } from './JsonView';
+import { ResponseTable, findList, summarize, tableColumns } from './ResponseTable';
+import { LatencyTrend, ResponseChart, chartSpec } from './ResponseChart';
 import { Icon } from './icons';
 import { KeyValues, SecretField } from './EnvsTab';
 
@@ -109,7 +111,7 @@ const GROUPERS: Record<
 /// response — one screen, like any API client.
 export function RequestsTab(): JSX.Element {
   const { project, path, toolId: selected, selectTool, update, openSheet, env: listEnv } = useStore();
-  const [listW, setListW] = useWidth('requests.list', 300);
+  const [listW, setListW] = useWidth('requests.list', 320);
   const [filter, setFilter] = useState('');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
     try {
@@ -302,10 +304,14 @@ export function RequestsTab(): JSX.Element {
                       <Method method={t.method} />
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className={`truncate text-[12px] ${t.id === tool?.id ? 'font-medium text-ink' : 'text-ink-muted group-hover:text-ink'}`}>{t.name}</span>
+                          <span className={`truncate text-[12.5px] ${t.id === tool?.id ? 'font-medium text-ink' : 'text-ink-muted group-hover:text-ink'}`} title={`${t.name}\n${t.method} ${t.path}`}>
+                            {titleOf(t)}
+                          </span>
                           {t.safety !== 'read' && <SafetyBadge safety={t.safety} />}
                         </div>
-                        <div className="truncate font-mono text-[10px] text-ink-faint">{t.path}</div>
+                        <div className="truncate font-mono text-[10px] text-ink-faint" title={`${t.method} ${t.path}`}>
+                          {t.name}
+                        </div>
                       </div>
                       {activeEnv && isLoginTool(t, activeEnv) ? (
                         <span
@@ -425,8 +431,17 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
   const p = project!;
   const env = p.envs.find((e) => e.name === envName) ?? p.envs[0];
   const [asAgent, setAsAgent] = useState(false);
+  /// Values this request needs that nothing has set yet (shown instead of sending).
+  const [needs, setNeeds] = useState<string[] | null>(null);
+  const [fetching, setFetching] = useState<string | null>(null);
+  /// The request that gives a needed value also needs arguments nobody has given it yet.
+  const [askFor, setAskFor] = useState<{ name: string; toolId: string; values: Record<string, string> } | null>(null);
+  const [view, setView] = useState<'table' | 'json' | 'chart'>('table');
   const [left, setLeft] = useState<LeftTab>('params');
   const [right, setRight] = useState<RightTab>('body');
+  useEffect(() => {
+    if (left === 'body' && ['GET', 'HEAD', 'DELETE'].includes(tool.method) && tool.bodyMode === 'none') setLeft('params');
+  }, [left, tool.method, tool.bodyMode]);
   const [values, setValues] = useState<Values>(() => Object.fromEntries(Object.entries(tool.example ?? {}).map(([k, v]) => [k, toText(v)])));
   const [result, setResult] = useState<TryResponse | null>(null);
   const [busy, setBusy] = useState(false);
@@ -460,12 +475,23 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
     return out;
   };
 
-  const send = async () => {
+  const send = async (force = false) => {
     if (!env) {
       say('Add an environment with a base URL first.', true);
       setTab('envs');
       return;
     }
+    // A {{value}} nothing has set yet would go out as the literal text and
+    // fail — say where it comes from instead, and offer to get it first.
+    if (!force) {
+      const now = Object.fromEntries(useStore.getState().runtime.map((r) => [r.name, r.value]));
+      const missing = [...new Set([...JSON.stringify(args()).matchAll(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g)].map((m) => m[1]))].filter((n) => now[n] === undefined && env.vars?.[n] === undefined);
+      if (missing.length) {
+        setNeeds(missing);
+        return;
+      }
+    }
+    setNeeds(null);
     if (writes && !armed) {
       setArmed(true);
       return;
@@ -506,6 +532,11 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         void sendRef.current();
+      } else if (e.key.toLowerCase() === 'l' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault();
+        const el = document.getElementById('overapi-path') as HTMLInputElement | null;
+        el?.focus();
+        el?.select();
       }
     };
     window.addEventListener('keydown', onKey);
@@ -563,7 +594,58 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
   const mine = history.filter((h) => h.toolId === tool.id);
   const used = varsUsed(tool);
   const producers = (name: string) => p.tools.filter((t) => t.captures?.some((c) => c.var === name)).map((t) => t.name);
+  /// Runs the request that keeps `name` (with its saved values), then sends this one.
+  /// Runs the request that keeps `name`, then sends this one. Its saved
+  /// values come first; a required argument it never had takes its default
+  /// or first allowed value, else it's asked for here (and remembered).
+  const runFirst = async (name: string, given: Record<string, unknown> = {}) => {
+    const src = p.tools.find((t) => t.captures?.some((c) => c.var === name));
+    if (!src || !env) return;
+    const a: Record<string, unknown> = { ...(src.example ?? {}), ...given };
+    const blank = (v: unknown) => v === undefined || v === null || v === '';
+    for (const prm of src.params.filter((x) => x.required || x.in === 'path')) {
+      if (!blank(a[prm.name])) continue;
+      if (prm.schema.default !== undefined) a[prm.name] = prm.schema.default;
+      else if (prm.schema.enum?.length) a[prm.name] = prm.schema.enum[0];
+    }
+    const still = src.params.filter((x) => (x.required || x.in === 'path') && blank(a[x.name]));
+    if (still.length) {
+      setAskFor({ name, toolId: src.id, values: Object.fromEntries(still.map((x) => [x.name, ''])) });
+      return;
+    }
+    setAskFor(null);
+    // What was given is kept on it, so next time it just runs.
+    if (Object.keys(given).length) update((x) => ({ ...x, tools: x.tools.map((t) => (t.id === src.id ? { ...t, example: a } : t)) }));
+    setFetching(src.name);
+    const r = await window.overapi.invoke('tool:try', { path: path!, project: p, env: env.name, toolId: src.id, args: a });
+    await refreshRuntime();
+    void refreshHistory();
+    setFetching(null);
+    if (!r.ok) return say(`${src.name} didn't work: ${r.error ?? `${r.status ?? ''} ${r.statusText ?? ''}`} — open it to see why.`.replace(/\s+/g, ' '), true);
+    if (!r.captured || !(name in r.captured)) return say(`${src.name} worked but its answer had no ${name} to keep — check where it's kept in its Flow.`, true);
+    say(`Got ${name} = ${String(r.captured[name]).slice(0, 40)} from ${src.name} — sending now.`);
+    // Let the new value reach the page, then send.
+    await new Promise((res) => setTimeout(res, 30));
+    void sendRef.current();
+  };
   const resHeaders = Object.entries(result?.headers ?? {});
+  // The response read once: a list shows as a table, and is summed up in the status line.
+  const parsed = useMemo(() => {
+    const r = parseMaybeJson(result?.full ?? result?.body ?? '');
+    return r.ok ? r.value : undefined;
+  }, [result]);
+  // What it was sorted by is what the table shows first (_sort=goals:desc → goals).
+  const sortedBy = tool.params
+    .filter((x) => /^_?(sort|sort_?by|order|order_?by)$/i.test(x.name))
+    .flatMap((x) => String(values[x.name] ?? '').split(/[,\s]+/))
+    .map((x) => x.split(':')[0].replace(/^[-+]/, ''))
+    .filter(Boolean);
+  // A table only when there's something to show in one; else JSON.
+  const listFound = findList(parsed);
+  const hasList = !!listFound && (!listFound.rows.length || tableColumns(listFound.rows, sortedBy).length > 0);
+  // A chart only when the list has the shape of one (a label and a number, or a date and a number).
+  const canChart = !!listFound && !!chartSpec(listFound.rows, sortedBy);
+  const summary = parsed !== undefined ? summarize(parsed, tool.name) : null;
   // What the address will carry: the query params that have a value.
   const query = tool.params
     .filter((x) => x.in === 'query' && (values[x.name] ?? '').trim() !== '')
@@ -605,8 +687,9 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
             </span>
             <input
               key={tool.path}
+              id="overapi-path"
               className={`min-w-[60px] bg-transparent py-1.5 font-mono text-[12px] outline-none ${query ? 'shrink-0 pr-0' : 'flex-1 pr-2'}`}
-              size={query ? Math.max(tool.path.length, 4) : undefined}
+              style={query ? { width: `${Math.max(tool.path.length, 4)}ch` } : undefined}
               defaultValue={tool.path}
               title="The path. Paste a whole URL with a query and its values fill the params."
               onBlur={(e) => e.target.value !== tool.path && reroute(tool.method, e.target.value.startsWith('/') ? e.target.value : `/${e.target.value}`)}
@@ -663,6 +746,7 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
             onClick={() => void send()}
           >
             {busy ? 'Sending…' : armed ? `Really send to ${env?.name}` : `Send to ${env?.name ?? '…'}`}
+            {!busy && !armed && <span className="ml-1.5 text-[10.5px] font-normal opacity-70">⌘↵</span>}
           </button>
         </div>
         <SubTabs
@@ -675,10 +759,14 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
                 return all.length ? ` ${on}/${all.length}` : '';
               })()}`,
             },
-            {
-              id: 'body',
-              label: `Body${tool.bodyMode !== 'none' ? ` ${tool.params.filter((x) => x.in === 'body').length}` : ''}`,
-            },
+            ...(['GET', 'HEAD', 'DELETE'].includes(tool.method) && tool.bodyMode === 'none'
+              ? []
+              : [
+                  {
+                    id: 'body' as LeftTab,
+                    label: `Body${tool.bodyMode !== 'none' ? ` ${tool.params.filter((x) => x.in === 'body').length}` : ''}`,
+                  },
+                ]),
             {
               id: 'headers',
               label: `Headers${Object.keys(tool.headers ?? {}).length ? ` ${Object.keys(tool.headers ?? {}).length}` : ''}`,
@@ -687,14 +775,15 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
               id: 'auth',
               label: (
                 <>
-                  Auth{tool.auth ? ' ·' : ''}
+                  <span className={tool.auth || (missingSecret && refused) ? '' : 'opacity-60'}>Auth</span>
+                  {tool.auth ? ' ·' : ''}
                   {missingSecret && refused && <span className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-warn align-middle" />}
                 </>
               ),
             },
             {
               id: 'flow',
-              label: `Flow${tool.captures?.length ? ` ${tool.captures.length}` : ''}`,
+              label: tool.captures?.length || tool.before?.length ? `Flow ${(tool.captures?.length ?? 0) + (tool.before?.length ?? 0)}` : <span className="opacity-60">Flow</span>,
             },
             {
               id: 'tool',
@@ -746,24 +835,123 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
               const v = rt[n] ?? env?.vars?.[n];
               const from = producers(n);
               return (
-                <span
+                <button
                   key={n}
-                  title={v ? `= ${v}` : from.length ? `Not set yet — send ${from[0]} first` : 'Not set — add it to the environment, or keep it from a response'}
-                  className={`rounded-full px-2 py-0.5 font-mono ${v ? 'bg-good/15 text-good' : 'bg-warn/15 text-warn'}`}
+                  type="button"
+                  disabled={!!v || !from.length || !!fetching}
+                  onClick={() => void runFirst(n)}
+                  title={
+                    v
+                      ? `= ${v} — ${runtime.find((r) => r.name === n)?.from ? `kept from ${runtime.find((r) => r.name === n)?.from}` : 'from the environment'}`
+                      : from.length
+                        ? `Click to run ${from[0]} now and keep it`
+                        : 'Not set — add it to the environment, or keep it from a response'
+                  }
+                  className={`rounded-full px-2 py-0.5 font-mono ${v ? 'bg-good/15 text-good' : 'bg-warn/15 text-warn'} ${!v && from.length ? 'hover:bg-warn/25' : ''}`}
                 >
-                  {`{{${n}}}`} {v ? '✓' : from.length ? `← send ${from[0]} first` : 'not set'}
-                </span>
+                  {`{{${n}}}`} {v ? `= ${v.length > 14 ? `${v.slice(0, 12)}…` : v}` : from.length ? (fetching === from[0] ? `running ${from[0]}…` : `← run ${from[0]} first`) : 'not set'}
+                </button>
               );
             })}
+          </div>
+        )}
+        {askFor &&
+          (() => {
+            const src = p.tools.find((t) => t.id === askFor.toolId);
+            if (!src) return null;
+            return (
+              <div className="mx-3 mt-3 rounded-lg border border-accent/40 bg-accent/[0.06] px-3.5 py-3 text-[12.5px]">
+                <p className="leading-relaxed">
+                  To get <b className="font-mono">{`{{${askFor.name}}}`}</b>, <b>{src.name}</b> runs first — and it needs {Object.keys(askFor.values).length === 1 ? 'a value' : 'values'} it has never
+                  been sent with. They’ll be kept on it for next time.
+                </p>
+                <div className="mt-2.5 space-y-2">
+                  {Object.keys(askFor.values).map((k) => {
+                    const prm = src.params.find((x) => x.name === k);
+                    return (
+                      <div key={k} className="grid grid-cols-[140px_minmax(0,1fr)] items-center gap-3">
+                        <span className="truncate font-mono text-[12px]" title={prm?.description}>
+                          {k}
+                        </span>
+                        <SeenInput
+                          toolId={src.id}
+                          param={k}
+                          value={askFor.values[k]}
+                          onValue={(v) => setAskFor({ ...askFor, values: { ...askFor.values, [k]: v } })}
+                          placeholder={prm?.description?.slice(0, 60) || 'value'}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="btn-primary h-8"
+                    disabled={!!fetching || Object.values(askFor.values).some((v) => !v.trim())}
+                    onClick={() => {
+                      const given = Object.fromEntries(
+                        Object.entries(askFor.values).map(([k, v]) => {
+                          const prm = src.params.find((x) => x.name === k);
+                          return [k, prm ? coerce(prm, v) : v];
+                        }),
+                      );
+                      void runFirst(askFor.name, given);
+                    }}
+                  >
+                    {fetching ? `Running ${fetching}…` : `Run ${src.name}, then send`}
+                  </button>
+                  <button type="button" className="btn h-8" onClick={() => setAskFor(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
+        {needs && !askFor && (
+          <div className="mx-3 mt-3 rounded-lg border border-warn/40 bg-warn/[0.07] px-3.5 py-3 text-[12.5px]">
+            {needs.map((n) => {
+              const from = producers(n);
+              return (
+                <p key={n} className="leading-relaxed">
+                  <b className="font-mono">{`{{${n}}}`}</b> has no value yet
+                  {from.length ? (
+                    <>
+                      {' '}
+                      — it comes from <b>{from[0]}</b>. Sending now would put the text <span className="font-mono">{`{{${n}}}`}</span> in the request.
+                    </>
+                  ) : (
+                    ' — nothing in this API keeps it. Type a value in its param, or add it to the environment.'
+                  )}
+                </p>
+              );
+            })}
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
+              {needs.some((n) => producers(n).length) && (
+                <button type="button" className="btn-primary h-8" disabled={!!fetching} onClick={() => void runFirst(needs.find((n) => producers(n).length)!)}>
+                  {fetching ? `Running ${fetching}…` : `Run ${producers(needs.find((n) => producers(n).length)!)[0]} first, then send`}
+                </button>
+              )}
+              <button
+                type="button"
+                className="btn h-8"
+                onClick={() => {
+                  setNeeds(null);
+                  setLeft('params');
+                }}
+              >
+                I’ll pick a value
+              </button>
+              <button type="button" className="text-[12px] text-ink-muted hover:text-ink" onClick={() => void send(true)}>
+                Send anyway
+              </button>
+            </div>
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto p-3">
           {left === 'params' && (
             <>
-              <ParamTable tool={tool} kinds={['path', 'query', 'header']} values={values} setValues={setValues} set={set} />
-              <p className="mt-3 text-[11px] text-ink-faint">
-                Params are what an agent fills in. Any value can use a <span className="font-mono">{'{{variable}}'}</span> — from the environment, or kept from an earlier response (Chain).
-              </p>
+              <ParamTable tool={tool} kinds={['path', 'query', 'header']} values={values} setValues={setValues} set={set} recent={mine} onAllHistory={() => setRight('history')} />
             </>
           )}
           {left === 'body' && <BodyEditor tool={tool} values={values} setValues={setValues} set={set} />}
@@ -791,7 +979,10 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
               <span className={`rounded px-2 py-0.5 font-mono font-semibold ${result.ok ? 'bg-good/15 text-good' : 'bg-bad/15 text-bad'}`}>
                 {result.status} {result.statusText}
               </span>
-              <span className="text-ink-faint">{result.durationMs} ms</span>
+              {summary && <span className="font-medium text-ink">{summary}</span>}
+              <span className={(result.durationMs ?? 0) > 1000 ? 'text-warn' : 'text-ink-faint'} title={(result.durationMs ?? 0) > 1000 ? 'Slow — agents wait for this too' : undefined}>
+                {(result.durationMs ?? 0) < 1000 ? `${result.durationMs ?? 0} ms` : `${((result.durationMs ?? 0) / 1000).toFixed(1)} s`}
+              </span>
               <span className="text-ink-faint">{sizeText(result.bytes)}</span>
               {result.truncated && (
                 <span className="text-warn" title="Agents get the same cut. Raise the limit under Tool, or narrow the request.">
@@ -939,19 +1130,42 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
                     </button>
                   </div>
                 )}
-                <JsonView
-                  text={(asAgent ? result.body : (result.full ?? result.body)) ?? ''}
-                  onKeep={(segs, v) =>
-                    setKeeping({
-                      capture: {
-                        var: suggestName(segs),
-                        from: 'body',
-                        path: formatPath(segs),
-                      },
-                      value: typeof v === 'object' ? JSON.stringify(v) : String(v),
-                    })
-                  }
-                />
+                {(hasList || canChart) && !asAgent && (
+                  <div className="mb-2 flex items-center gap-2">
+                    <div className="inline-flex rounded-md border border-rule-strong bg-canvas p-0.5 text-[11.5px]">
+                      {([...(hasList ? (['table'] as const) : []), ...(canChart ? (['chart'] as const) : []), 'json'] as const).map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setView(v)}
+                          className={`rounded px-2.5 py-0.5 ${view === v ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}
+                        >
+                          {v === 'table' ? 'Table' : v === 'chart' ? 'Chart' : 'JSON'}
+                        </button>
+                      ))}
+                    </div>
+                    {view === 'table' && <span className="text-[11px] text-ink-faint">Click a row for all of it · switch to JSON to keep a value</span>}
+                  </div>
+                )}
+                {canChart && !asAgent && view === 'chart' ? (
+                  <ResponseChart json={parsed} prefer={sortedBy} />
+                ) : hasList && !asAgent && view === 'table' ? (
+                  <ResponseTable json={parsed} prefer={sortedBy} />
+                ) : (
+                  <JsonView
+                    text={(asAgent ? result.body : (result.full ?? result.body)) ?? ''}
+                    onKeep={(segs, v) =>
+                      setKeeping({
+                        capture: {
+                          var: suggestName(segs),
+                          from: 'body',
+                          path: formatPath(segs),
+                        },
+                        value: typeof v === 'object' ? JSON.stringify(v) : String(v),
+                      })
+                    }
+                  />
+                )}
               </div>
             ))}
           {right === 'headers' &&
@@ -1039,25 +1253,32 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
             (mine.length === 0 ? (
               <Empty>No calls yet.</Empty>
             ) : (
-              <ul className="space-y-1">
-                {mine.map((h) => (
-                  <li key={h.id}>
-                    <button
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-wash-strong"
-                      title="Load these arguments"
-                      onClick={() => {
-                        setValues(Object.fromEntries(Object.entries(h.args).map(([k, v]) => [k, toText(v)])));
-                        setLeft('params');
-                      }}
-                    >
-                      <span className={`w-10 font-mono font-semibold ${h.ok ? 'text-good' : 'text-bad'}`}>{h.status ?? 'ERR'}</span>
-                      <EnvChip name={h.env} />
-                      <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-muted">{Object.keys(h.args).length ? JSON.stringify(h.args) : '(no arguments)'}</span>
-                      <span className="shrink-0 text-[10px] text-ink-faint">{new Date(h.at).toLocaleTimeString()}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+              <>
+                <LatencyTrend entries={mine} />
+                <ul className="space-y-0.5">
+                  {collapseRuns(mine).map(({ h, n }) => (
+                    <li key={h.id}>
+                      <button
+                        className="group flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[12px] hover:bg-wash-strong"
+                        title="Use these values"
+                        onClick={() => {
+                          setValues(Object.fromEntries(Object.entries(h.args).map(([k, v]) => [k, toText(v)])));
+                          setLeft('params');
+                        }}
+                      >
+                        <span className={`w-9 shrink-0 font-mono font-semibold ${h.ok ? 'text-good' : 'text-bad'}`}>{h.status ?? 'ERR'}</span>
+                        <EnvChip name={h.env} />
+                        <span className="min-w-0 flex-1">
+                          <ArgChips args={h.args} max={4} />
+                        </span>
+                        {n > 1 && <span className="shrink-0 rounded-full bg-wash-strong px-1.5 text-[10.5px] font-semibold tabular-nums text-ink-muted">×{n}</span>}
+                        <span className="shrink-0 text-[10.5px] text-ink-faint group-hover:hidden">{ago(h.at)}</span>
+                        <span className="hidden shrink-0 text-[10.5px] text-accent group-hover:inline">Use these →</span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </>
             ))}
         </div>
       </div>
@@ -1679,6 +1900,64 @@ function bestPath(sh: import('@shared/scenario').Shape | undefined, key: string)
   return all.sort((a, b) => a.split('.').length - b.split('.').length)[0];
 }
 
+/// A call's arguments as short chips: `searchText test`, `includeHidden ✓`.
+function ArgChips({ args, max = 6 }: { args: Record<string, unknown>; max?: number }): JSX.Element {
+  const entries = Object.entries(args).filter(([, v]) => v !== '' && v !== undefined && v !== null);
+  if (!entries.length) return <span className="text-ink-faint">no arguments</span>;
+  const shown = (v: unknown) => (v === true ? '✓' : v === false ? '✗' : Array.isArray(v) ? `${v.length} item${v.length === 1 ? '' : 's'}` : typeof v === 'object' ? '{…}' : String(v));
+  return (
+    <span className="flex min-w-0 flex-wrap items-center gap-1">
+      {entries.slice(0, max).map(([k, v]) => (
+        <span key={k} className="inline-flex max-w-[220px] items-center gap-1 rounded bg-wash-strong px-1.5 py-px font-mono text-[11px]">
+          <span className="text-ink-muted">{k}</span>
+          <span className={`truncate ${v === false ? 'text-ink-faint' : 'text-ink'}`}>{shown(v)}</span>
+        </span>
+      ))}
+      {entries.length > max && <span className="text-[11px] text-ink-faint">+{entries.length - max}</span>}
+    </span>
+  );
+}
+
+const ago = (at: string) => {
+  const s = Math.round((Date.now() - new Date(at).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(at).toLocaleDateString();
+};
+
+/// The same call made again and again reads as one line: ×3.
+function collapseRuns<T extends { status?: number; env: string; args: Record<string, unknown> }>(list: T[]): { h: T; n: number }[] {
+  const out: { h: T; n: number }[] = [];
+  for (const h of list) {
+    const last = out[out.length - 1];
+    if (last && last.h.status === h.status && last.h.env === h.env && JSON.stringify(last.h.args) === JSON.stringify(h.args)) last.n++;
+    else out.push({ h, n: 1 });
+  }
+  return out;
+}
+
+/// A request's name as people read it: the spec's summary when short,
+/// else its tool name in words — list_order_lines → "Order lines".
+export function titleOf(t: ToolDef): string {
+  const sum = t.origin?.summary?.trim();
+  if (sum && sum.length <= 60 && sum !== t.name) return sum;
+  const words = t.name.replace(/_\d+$/, '').split('_');
+  const verb = words[0];
+  const rest = words.slice(1).join(' ');
+  const text = verb === 'list' && rest ? rest : verb === 'get' && rest ? `One ${rest}` : words.join(' ');
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/// One colour per group, the same above (its card) and below (its chips),
+/// so where a param lands is plain.
+const TONE: Record<string, { card: string; label: string; dot: string; chip: string }> = {
+  Needed: { card: 'border-amber-500/30 bg-amber-500/[0.06]', label: 'text-amber-700 dark:text-amber-300', dot: 'bg-amber-500', chip: 'border-amber-500/50 hover:bg-amber-500/10' },
+  'Filter by': { card: 'border-sky-500/30 bg-sky-500/[0.06]', label: 'text-sky-700 dark:text-sky-300', dot: 'bg-sky-500', chip: 'border-sky-500/50 hover:bg-sky-500/10' },
+  Switches: { card: 'border-teal-500/30 bg-teal-500/[0.06]', label: 'text-teal-700 dark:text-teal-300', dot: 'bg-teal-500', chip: 'border-teal-500/50 hover:bg-teal-500/10' },
+  Paging: { card: 'border-violet-500/30 bg-violet-500/[0.06]', label: 'text-violet-700 dark:text-violet-300', dot: 'bg-violet-500', chip: 'border-violet-500/50 hover:bg-violet-500/10' },
+};
+
 const PAGING = /^(page|page_?number|page_?size|per_?page|size|limit|offset|cursor|sort|sort_?by|order|order_?by|direction|start|count)$/i;
 
 /// What a parameter holds, in a word — it picks the control.
@@ -1703,13 +1982,19 @@ function ParamTable({
   values,
   setValues,
   set,
+  recent,
+  onAllHistory,
 }: {
   tool: ToolDef;
   kinds: ParamIn[];
   values: Values;
   setValues: (fn: (v: Values) => Values) => void;
   set: (fn: (t: ToolDef) => ToolDef) => void;
+  /// Calls made before — the ones that worked are offered as samples.
+  recent?: import('@shared/ipc').HistoryEntry[];
+  onAllHistory?: () => void;
 }): JSX.Element {
+  const [pastOpen, setPastOpen] = useState(false);
   const [adding, setAdding] = useState<{ name: string; in: ParamIn } | null>(null);
   const [added, setAdded] = useState<Set<string>>(new Set());
   const [fresh, setFresh] = useState<string | null>(null);
@@ -1749,20 +2034,93 @@ function ParamTable({
     });
   };
 
+  // Distinct calls that worked, newest first, with how often each was made.
+  const samples = (() => {
+    const seen = new Map<string, { args: Record<string, unknown>; n: number; at: string; env: string }>();
+    for (const h of recent ?? []) {
+      if (!h.ok || !Object.keys(h.args).length) continue;
+      // The same params with other values is the same call tweaked: keep the newest.
+      const key = Object.keys(h.args).sort().join('|');
+      const s = seen.get(key);
+      if (s) s.n++;
+      else seen.set(key, { args: h.args, n: 1, at: h.at, env: h.env });
+    }
+    const current = JSON.stringify(Object.fromEntries(Object.entries(values).filter(([, v]) => v !== '')));
+    return [...seen.values()].filter((x) => JSON.stringify(Object.fromEntries(Object.entries(x.args).map(([k, v]) => [k, toText(v)]))) !== current).slice(0, 3);
+  })();
+
   return (
     <div className="space-y-5">
       <section>
-        <div className="mb-2 flex items-baseline gap-2.5">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Sending</h3>
+        <div className="mb-2 flex items-center gap-2.5">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink">Sending</h3>
           <span className="text-[12px] text-ink-faint">{sending.length ? 'what goes on this request — the same an agent fills in' : `nothing yet — every ${noun} here is optional`}</span>
+          <span className="flex-1" />
+          {samples.length > 0 && (
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setPastOpen((o) => !o)}
+                onBlur={() => setTimeout(() => setPastOpen(false), 150)}
+                aria-expanded={pastOpen}
+                className={`inline-flex h-[26px] items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${pastOpen ? 'border-accent bg-accent/10 text-ink' : 'border-rule-strong text-ink-muted hover:text-ink'}`}
+              >
+                <Icon name="history" size={12} /> Load a past call <span className="text-ink-faint">{samples.length}</span>
+              </button>
+              {pastOpen && (
+                <div
+                  className="absolute right-0 top-full z-30 mt-1 w-[440px] overflow-hidden rounded-lg border border-rule-strong bg-surface-elevated shadow-xl"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <div className="border-b border-rule px-3 py-2 text-[11px] text-ink-faint">Calls that worked — replaces what you’re sending</div>
+                  {samples.map((x) => (
+                    <button
+                      key={JSON.stringify(x.args)}
+                      type="button"
+                      className="flex w-full items-center gap-2.5 px-3 py-2 text-left hover:bg-accent/10"
+                      onClick={() => {
+                        setValues(() => Object.fromEntries(Object.entries(x.args).map(([k, v]) => [k, toText(v)])));
+                        setPastOpen(false);
+                      }}
+                    >
+                      <span className="shrink-0 font-mono text-[11.5px] font-semibold text-good">200</span>
+                      <span className="min-w-0 flex-1">
+                        <ArgChips args={x.args} max={4} />
+                      </span>
+                      <span className="shrink-0 text-[10.5px] text-ink-faint">
+                        {x.n > 1 ? `${x.n}× · ` : ''}
+                        {ago(x.at)}
+                      </span>
+                    </button>
+                  ))}
+                  {onAllHistory && (
+                    <button
+                      type="button"
+                      className="w-full border-t border-rule px-3 py-2 text-left text-[11.5px] text-accent hover:bg-wash"
+                      onClick={() => {
+                        setPastOpen(false);
+                        onAllHistory();
+                      }}
+                    >
+                      All {recent?.length ?? 0} in History →
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {sending.length > 0 && (
-          <div className="overflow-hidden rounded-lg border border-rule bg-surface">
+          <div className="space-y-2">
             {groupsOf(sending)
               .filter(([, list]) => list.length)
               .map(([label, list]) => (
-                <div key={label}>
-                  <div className="border-b border-rule bg-wash px-3 py-1 text-[10.5px] font-medium text-ink-faint">{label}</div>
+                <div key={label} className={`overflow-hidden rounded-lg border ${TONE[label].card}`}>
+                  <div className={`flex items-center gap-1.5 px-3 pb-0.5 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.07em] ${TONE[label].label}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${TONE[label].dot}`} />
+                    {label}
+                    <span className="font-normal normal-case tracking-normal opacity-70">{list.length}</span>
+                  </div>
                   {list.map(({ prm, i }) => (
                     <ParamRow
                       key={`${prm.in}:${prm.name}`}
@@ -1792,7 +2150,7 @@ function ParamTable({
       {(rows.length > sending.length || q) && (
         <section>
           <div className="mb-2 flex items-center gap-2.5">
-            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink-muted">Add</h3>
+            <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink">Add</h3>
             <span className="text-[12px] text-ink-faint">{rows.length - sending.length} more it takes — click one to send it</span>
             <span className="flex-1" />
             {rows.length - sending.length > 8 && (
@@ -1804,14 +2162,17 @@ function ParamTable({
               .filter(([, list]) => list.length)
               .map(([label, list]) => (
                 <div key={label} className="flex flex-wrap items-center gap-1.5">
-                  <span className="w-16 shrink-0 text-[11.5px] text-ink-faint">{label}</span>
+                  <span className={`flex w-[72px] shrink-0 items-center gap-1.5 text-[11.5px] font-medium ${TONE[label].label}`}>
+                    <span className={`h-1.5 w-1.5 rounded-full ${TONE[label].dot}`} />
+                    {label}
+                  </span>
                   {list.map(({ prm }) => (
                     <button
                       key={prm.name}
                       type="button"
                       title={prm.description ?? prm.schema.description ?? `${kindOf(prm)} · ${prm.in}`}
                       onClick={() => add(prm.name)}
-                      className="rounded-full border border-dashed border-rule-strong px-2.5 py-1 font-mono text-[11.5px] text-ink hover:border-accent/60 hover:bg-accent/5"
+                      className={`rounded-full border border-dashed bg-surface px-2.5 py-1 font-mono text-[11.5px] text-ink ${TONE[label].chip}`}
                     >
                       + {prm.name}
                     </button>
@@ -2075,6 +2436,30 @@ function Stepper({ value, onValue, autoFocus }: { value: string; onValue: (v: st
 
 /// One line of what's sent: the name, the right control for its kind, and
 /// — while you're in it — what it means and its settings.
+/// What a {{variable}} in a param stands for right now, and where it came
+/// from — so a value found by an earlier request is visible, not magic.
+function KeptValue({ value }: { value: string }): JSX.Element | null {
+  const { runtime, project, env: envName } = useStore();
+  const m = value.trim().match(/^\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}$/);
+  if (!m) return null;
+  const kept = runtime.find((r) => r.name === m[1]);
+  const fromEnv = project?.envs.find((e) => e.name === envName)?.vars?.[m[1]];
+  if (!kept && fromEnv === undefined) return null;
+  const ago = (at: string) => {
+    const s = Math.round((Date.now() - new Date(at).getTime()) / 1000);
+    return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  };
+  return (
+    <div className="flex items-center gap-1.5 px-1 text-[11.5px]">
+      <span className="text-good">=</span>
+      <span className="max-w-[260px] truncate font-mono text-good" title={kept?.value ?? fromEnv}>
+        {kept?.value ?? fromEnv}
+      </span>
+      <span className="text-ink-faint">· {kept ? `from ${kept.from ?? 'an earlier response'} · ${ago(kept.at)}` : `from the ${envName} environment`}</span>
+    </div>
+  );
+}
+
 function ParamRow({
   toolId,
   prm,
@@ -2145,8 +2530,9 @@ function ParamRow({
           {prm.required && prm.in !== 'path' ? ' · required' : ''}
         </span>
       </div>
-      <div className="min-w-0 space-y-1.5">
+      <div className="min-w-0 max-w-[620px] space-y-1.5">
         {control}
+        <KeptValue value={value} />
         {open && (
           <div className="space-y-1 pb-0.5">
             <input

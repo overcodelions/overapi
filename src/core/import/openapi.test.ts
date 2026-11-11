@@ -110,7 +110,7 @@ describe('Swagger 2 import', () => {
 describe('relative servers', () => {
   const spec = JSON.stringify({ openapi: '3.0.2', info: { title: 'Pets', version: '1' }, servers: [{ url: '/api/v3' }], paths: { '/pet/{id}': { get: { responses: {} } } } });
   it('resolves against the URL the spec came from', () => {
-    expect(importText(spec, 'https://petstore3.swagger.io/api/v3/openapi.json').envs[0].baseUrl).toBe('https://petstore3.swagger.io/api/v3');
+    expect(importText(spec, 'https://acme-pets.acme.example/api/v3/openapi.json').envs[0].baseUrl).toBe('https://acme-pets.acme.example/api/v3');
   });
   it('stays relative when imported from a file', () => {
     expect(importText(spec, 'openapi.json').envs[0].baseUrl).toBe('/api/v3');

@@ -8,7 +8,7 @@ import { useStore, type McpTab as Sub } from './store';
 import { OverviewTab } from './OverviewTab';
 import { AgentTab } from './AgentTab';
 import { PublishTab } from './PublishTab';
-import { SubTabs } from './ui';
+import { SubTabs, TryAgentTab } from './ui';
 import { Icon } from './icons';
 import { checkProject, TOOL_BUDGET } from '@shared/check';
 import { offered, slug } from '@shared/project';
@@ -74,7 +74,9 @@ export function McpTab(): JSX.Element {
               <Icon name="check" size={12} /> In Claude Code
             </span>
           )}
-          <span className="mb-1"><Journey /></span>
+          <span className="mb-1">
+            <Journey />
+          </span>
           <button className="btn mb-1 h-[36px] px-3.5 text-[13px]" title="Tidy, connect and document it — with your claude or codex" onClick={() => openSheet({ kind: 'agentready' })}>
             <Icon name="sparkle" size={13} /> Make it agent-ready
           </button>
@@ -87,16 +89,34 @@ export function McpTab(): JSX.Element {
           <Tile
             label={`Tools on ${env?.name ?? '—'}`}
             tone={count > TOOL_BUDGET ? 'warn' : 'plain'}
-            value={<>{count}{count > TOOL_BUDGET && <span className="ml-1.5 text-[13px] font-normal text-warn">· budget {TOOL_BUDGET}</span>}</>}
+            value={
+              <>
+                {count}
+                {count > TOOL_BUDGET && <span className="ml-1.5 text-[13px] font-normal text-warn">· budget {TOOL_BUDGET}</span>}
+              </>
+            }
             note={`≈${tokens.toLocaleString()} tokens every agent turn · ${env?.allowWrites ? 'writes allowed' : 'read-only'}`}
             onClick={() => setMcpTab('tools')}
           />
-          <Tile label="Ready for agents" tone={score >= 90 ? 'good' : score >= 60 ? 'warn' : 'bad'} value={String(score)} note={weakCount ? `${weakCount} weak description${weakCount === 1 ? '' : 's'}` : 'descriptions look fine'} onClick={() => setMcpTab('tools')} colorValue />
+          <Tile
+            label="Ready for agents"
+            tone={score >= 90 ? 'good' : score >= 60 ? 'warn' : 'bad'}
+            value={String(score)}
+            note={weakCount ? `${weakCount} weak description${weakCount === 1 ? '' : 's'}` : 'descriptions look fine'}
+            onClick={() => setMcpTab('tools')}
+            colorValue
+          />
           <Tile
             label="Security"
             tone={scan && scan.score >= 90 ? 'good' : scan && scan.score >= 60 ? 'warn' : 'bad'}
             value={String(scan?.score ?? '—')}
-            note={scan?.blocking.length ? `${scan.blocking.length} serious — blocks publishing to the team` : scan?.findings.length ? `${scan.findings.length} finding${scan.findings.length === 1 ? '' : 's'}, none blocking` : 'nothing found'}
+            note={
+              scan?.blocking.length
+                ? `${scan.blocking.length} serious — blocks publishing to the team`
+                : scan?.findings.length
+                  ? `${scan.findings.length} finding${scan.findings.length === 1 ? '' : 's'}, none blocking`
+                  : 'nothing found'
+            }
             onClick={() => setMcpTab('security')}
             colorValue
           />
@@ -108,6 +128,7 @@ export function McpTab(): JSX.Element {
         <nav aria-label="MCP server pages" className="flex items-end gap-4 border-b border-rule">
           {MCP_PAGES.map((t) => {
             const on = mcpTab === t.id || (t.id === 'tools' && mcpTab === 'install');
+            if (t.id === 'test') return <TryAgentTab key={t.id} on={on} onClick={() => setMcpTab(t.id)} />;
             return (
               <button
                 key={t.id}
@@ -140,8 +161,21 @@ export function McpTab(): JSX.Element {
   );
 }
 
-
-function Tile({ label, value, note, tone, onClick, colorValue }: { label: string; value: React.ReactNode; note: string; tone: 'good' | 'warn' | 'bad' | 'plain'; onClick: () => void; colorValue?: boolean }): JSX.Element {
+function Tile({
+  label,
+  value,
+  note,
+  tone,
+  onClick,
+  colorValue,
+}: {
+  label: string;
+  value: React.ReactNode;
+  note: string;
+  tone: 'good' | 'warn' | 'bad' | 'plain';
+  onClick: () => void;
+  colorValue?: boolean;
+}): JSX.Element {
   const box = tone === 'bad' ? 'border-bad/40 bg-bad/[0.05]' : tone === 'warn' ? 'border-warn/40 bg-warn/[0.05]' : 'border-rule bg-surface';
   const ink = !colorValue ? '' : tone === 'good' ? 'text-good' : tone === 'warn' ? 'text-warn' : tone === 'bad' ? 'text-bad' : '';
   return (
@@ -161,7 +195,10 @@ function TestsTile(): JSX.Element {
     if (path) void window.overapi.invoke('scenario:runs', path).then(setRuns);
   }, [path]);
   const scenarios = project?.scenarios ?? [];
-  const latest = scenarios.map((s) => runs[s.id]).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at))[0];
+  const latest = scenarios
+    .map((s) => runs[s.id])
+    .filter(Boolean)
+    .sort((a, b) => b.at.localeCompare(a.at))[0];
   const failing = scenarios.filter((s) => runs[s.id]?.failed).length;
   const name = latest ? scenarios.find((s) => s.id === latest.scenarioId)?.name : undefined;
   return (
@@ -169,7 +206,13 @@ function TestsTile(): JSX.Element {
       label="Tests"
       tone={!scenarios.length || !latest ? 'plain' : failing ? 'bad' : 'good'}
       value={!scenarios.length ? 'None yet' : !latest ? 'Not run' : failing ? `${failing} failing` : 'Passing'}
-      note={latest ? `${name ?? 'Last run'} · ${latest.env} · ${ago(latest.at)}` : scenarios.length ? `${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'}` : 'Record traffic, then save it as a test'}
+      note={
+        latest
+          ? `${name ?? 'Last run'} · ${latest.env} · ${ago(latest.at)}`
+          : scenarios.length
+            ? `${scenarios.length} scenario${scenarios.length === 1 ? '' : 's'}`
+            : 'Record traffic, then save it as a test'
+      }
       onClick={() => setTab('tests')}
       colorValue
     />

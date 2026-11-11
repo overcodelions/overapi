@@ -315,6 +315,30 @@ function startApp(): void {
       return { ok: true, name };
     });
     handle('systems:installs', (f) => st.installedFor(f));
+    handle('systems:setEnabled', (p, toolIds, enabled) => {
+      try {
+        const project = core.readProject(p);
+        project.tools = project.tools.map((t) => (toolIds.includes(t.id) ? { ...t, enabled } : t));
+        core.writeProject(p, project);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: (e as Error).message };
+      }
+    });
+    handle('systems:hint', (p, toolId, param, text) => {
+      try {
+        const project = core.readProject(p);
+        project.tools = project.tools.map((t) =>
+          t.id !== toolId
+            ? t
+            : { ...t, params: t.params.map((x) => (x.name !== param ? x : { ...x, description: x.description?.includes(text) ? x.description : [x.description?.trim(), text].filter(Boolean).join(' ') })) },
+        );
+        core.writeProject(p, project);
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: (e as Error).message };
+      }
+    });
 
     handle('projects:create', ({ title, baseUrl }) => {
       try {
@@ -673,28 +697,44 @@ function startApp(): void {
     handle('ai:cancel', () => documenting?.cancel());
 
     // Ask: a question, answered by claude through this API's own MCP server.
-    let asking: { stop: () => void } | null = null;
-    handle('agent:ask', async (p, envName, question) => {
+    /// Questions being answered, by run: each panel follows only its own.
+    const asking = new Map<string, { stop: () => void }>();
+    handle('agent:ask', async (p, envName, question, runId) => {
       const bin = claudeBin();
       if (!bin) return { ok: false, error: 'Asking needs the claude CLI (Claude Code). Install it, or use “Call a tool” to try tools by hand.' };
-      if (asking) return { ok: false, error: 'Already answering a question — stop it first.' };
+      if (asking.size >= 3) return { ok: false, error: 'Three questions are already being answered — stop one first.' };
       const { startAskServer, runAsk } = await import('./ask');
-      let project: Project;
+      let title: string;
+      let srv: Awaited<ReturnType<typeof startAskServer>>;
       try {
-        project = core.readProject(p);
+        if (path.basename(p) === SYSTEM_FILE) {
+          // A workspace: every member, as the one server Claude Code would get.
+          const sysNow = () => {
+            const sys = readSystem(p);
+            return { name: sys.name, title: sys.title, description: sys.description, instructions: sys.instructions, members: sys.members.flatMap((m) => { try { return [{ path: m, project: core.readProject(m), vars: vars(m) }]; } catch { return []; } }) };
+          };
+          const first = sysNow();
+          if (!first.members.length) return { ok: false, error: 'None of this workspace’s APIs can be read.' };
+          title = first.title;
+          srv = await startAskServer({ project: () => first.members[0].project, system: sysNow, envName, vars: vars(p), log: () => undefined, peer: peers().peer });
+        } else {
+          title = core.readProject(p).title;
+          srv = await startAskServer({ project: () => core.readProject(p), envName, vars: vars(p), log: () => undefined, peer: peers().peer });
+        }
       } catch (e) {
         return { ok: false, error: (e as Error).message };
       }
-      const srv = await startAskServer({ project: () => core.readProject(p), envName, vars: vars(p), log: () => undefined, peer: peers().peer });
-      const run = runAsk({ bin, question, title: project.title, url: srv.url, token: srv.token, model: st.getSettings().aiModel || undefined, onEvent: (event) => emit({ type: 'ask:event', event }) });
-      asking = run;
+      const run = runAsk({ bin, question, title, url: srv.url, token: srv.token, model: st.getSettings().aiModel || undefined, onEvent: (event) => emit({ type: 'ask:event', runId, event }) });
+      asking.set(runId, run);
       void run.done.finally(() => {
-        asking = null;
+        asking.delete(runId);
         srv.close();
       });
       return { ok: true };
     });
-    handle('agent:stop', () => asking?.stop());
+    handle('agent:stop', (runId) => {
+      for (const [id, run] of asking) if (!runId || id === runId) run.stop();
+    });
 
     handle('overgo:publish', (p, project, env) => {
       const e = project.envs.find((x) => x.name === env);
@@ -1018,7 +1058,7 @@ function startApp(): void {
     // Explore for me: overapi drives the recording window itself.
     let exploring = false;
     let exploreStop = false;
-    handle('explore:start', async () => {
+    handle('explore:start', async (opts) => {
       const rec = browserRec;
       if (!rec || rec.window.isDestroyed()) return { ok: false, error: chromeRec ? 'Exploring works in overapi’s own browser window, not Chrome.' : 'Start a browser recording first.' };
       if (exploring) return { ok: false, error: 'Already exploring.' };
@@ -1028,20 +1068,33 @@ function startApp(): void {
       const scoped = () => within(recorded, recTarget || undefined).filter((c) => !c.error && c.status < 400);
       exploring = true;
       exploreStop = false;
+      // Nothing but reads leaves the browser while overapi drives it.
+      let blocked = 0;
+      let flood: string | null = null;
+      await rec.guard({
+        safeSearch: !!opts?.safeSearch,
+        onBlocked: () => void blocked++,
+        onFlood: (why) => {
+          flood = why;
+          exploreStop = true;
+        },
+      });
       try {
         const status = await explore(rec.page, DEFAULT_EXPLORE, {
           routes: () => new Set(scoped().map((c) => `${c.method} ${routeOf(c.path)}`)).size,
           wanted: () => coverageOf(scoped()).things.filter((t) => t.list !== t.detail).map((t) => t.noun),
           stopped: () => exploreStop || browserRec !== rec,
           onStatus: (s) => {
+            s = { ...s, blocked };
             emit({ type: 'explore:status', status: s });
             rec.setNote(s.running ? `Exploring · page ${s.pages} of ${s.maxPages} · ${s.found} new` : '');
           },
         });
-        return { ok: true, status };
+        return { ok: true, status: flood ? { ...status, running: false, blocked, reason: `stopped to protect your network: ${flood}` } : { ...status, blocked } };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
       } finally {
+        if (!rec.window.isDestroyed()) await rec.guard(null);
         exploring = false;
         if (!rec.window.isDestroyed()) rec.setNote('');
       }
@@ -1259,6 +1312,9 @@ function startApp(): void {
       const sc = project.scenarios?.find((s) => s.id === scenarioId);
       const env = project.envs.find((e) => e.name === envName);
       if (!sc || !env) return { ok: false, error: 'That scenario or environment is gone.' };
+      // A public host gets a polite load at most, whatever the page asked for.
+      const { isPrivateHost, PUBLIC_LOAD_LIMITS } = await import('../shared/network');
+      if (!isPrivateHost(env.baseUrl)) opts = { ...opts, users: Math.min(opts.users, PUBLIC_LOAD_LIMITS.users), durationSec: Math.min(opts.durationSec, PUBLIC_LOAD_LIMITS.durationSec) };
       if (loadAbort) return { ok: false, error: 'A load test is already running. Stop it first.' };
       loadAbort = new AbortController();
       try {

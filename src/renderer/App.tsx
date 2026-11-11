@@ -18,6 +18,7 @@ import { Icon, Monogram, type IconName } from './icons';
 import { checkProject } from '@shared/check';
 import { pasteIntent } from './pasteIntent';
 import { SystemSheet, SystemView } from './SystemView';
+import { QuickSwitch } from './QuickSwitch';
 import type { ProjectRef } from '@shared/ipc';
 
 export function App(): JSX.Element {
@@ -54,6 +55,7 @@ export function App(): JSX.Element {
       {sheet?.kind === 'new' && <NewApiSheet key={`${sheet.mode}:${sheet.prefill ?? ''}`} mode={sheet.mode} prefill={sheet.prefill} />}
       {sheet?.kind === 'settings' && <SettingsSheet />}
       {sheet?.kind === 'system' && <SystemSheet members={sheet.members} />}
+      <QuickSwitch />
       {sheet?.kind === 'delete' && <DeleteApiSheet path={sheet.path} title={sheet.title} />}
       {sheet?.kind === 'curl' && <CurlSheet />}
       {sheet?.kind === 'request' && <NewRequestSheet />}
@@ -399,7 +401,7 @@ function Sidebar(): JSX.Element {
           {systems.length > 0 && rest.length > 0 && <div className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-faint">Other APIs</div>}
           {rest.map((p) => row(p))}
         </nav>
-        <div className="space-y-1.5 border-t border-rule p-2">
+        <div className="flex h-[88px] shrink-0 flex-col justify-center gap-1.5 border-t border-rule px-2">
           <button
             className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12px] ${recordingOn ? 'bg-wash-strong text-ink' : recorder.running ? 'bg-bad/10 text-ink' : 'text-ink-muted hover:bg-wash hover:text-ink'}`}
             onClick={() => openRecorder()}

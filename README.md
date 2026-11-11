@@ -1,89 +1,126 @@
-# overapi
+<p align="center">
+  <img src="build/icon.png" width="112" alt="overapi">
+</p>
 
-Make any API easy for agents.
+<h1 align="center">overapi</h1>
 
-overapi is an API client that runs entirely on your machine, with no account and no cloud. Every request you save can become a tool. Build up an API, try it against local, staging or production, shape it into something an agent can use well, then publish it to Claude Code, Codex, overcli, any MCP client, or your org's **overgo**.
+<p align="center">
+  <b>The API you can't rewrite, as tools your agents can safely use.</b><br>
+  An API client on your machine that turns REST, SOAP and recorded web apps into curated MCP servers.
+</p>
 
-It's the fourth app in the family, after overcli, overgit and overdb, and uses the same stack: Electron, React, Vite, Tailwind and TypeScript.
+<p align="center">
+  <a href="https://github.com/overcodelions/overapi/actions/workflows/ci.yml"><img src="https://github.com/overcodelions/overapi/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="License: Apache-2.0"></a>
+  <img src="https://img.shields.io/badge/MCP-server-7c8bff" alt="MCP server">
+  <img src="https://img.shields.io/badge/macOS-Electron-555" alt="macOS · Electron">
+</p>
 
-## Four ways in
+<p align="center">
+  Sibling of <a href="https://github.com/overcodelions/overcli">overcli</a> ·
+  <a href="https://github.com/overcodelions/overgit">overgit</a> ·
+  <a href="https://github.com/overcodelions/overdb">overdb</a>
+</p>
+
+---
+
+Every company has APIs agents should be able to use — and almost none of them come with a clean spec. Some have Swagger behind a login, some are SOAP, some exist only as the calls a web app makes. Pointing an agent at them raw gets you a hundred cryptic tools, ids it can't find, and a `DELETE` it shouldn't see.
+
+overapi is the step in between. Bring an API in however you can, use it like Insomnia or Postman, then make it **agent-ready** — names that say what they do, descriptions an agent can choose by, ids that flow from one call to the next, writes hidden until you allow them — and publish it as an MCP server. No account, no cloud: it runs on your Mac, and your secrets stay in the keychain.
+
+## How it goes
 
 | | |
-| --- | --- |
-| **From scratch** | A base URL and your first request, as in any API client. |
-| **From a cURL** | Use "Copy as cURL" in the browser's network tab, or take the line from the wiki. Ids in the path become arguments, the values you sent become the example, and any token goes to the keychain. |
-| **Import** | OpenAPI 3, Swagger 2, a HAR capture (for APIs with no spec at all) or a Postman v2 collection. |
-| **From documentation** | Hand over PDFs, Markdown or HTML pages, a docs URL, or pasted text. Your own `claude` (or `codex`) CLI drafts an OpenAPI document from them, which goes through the normal importer. claude gets Read, Grep and Glob only: no shell, no web, no MCP. |
+|---|---|
+| **1 · Bring it in** | A spec, a cURL, a HAR, a Postman collection, a WSDL, the docs, the service's own source code — or record the web app that uses it. |
+| **2 · Use it** | A fast workbench: environments, sign-in, the params that matter, responses you can read, tests and load. |
+| **3 · Make it agent-ready** | One pass that tidies, connects and documents it — rules first, then your own claude or codex — with every change shown before it's applied. |
+| **4 · Publish** | Into Claude Code in one click, to any MCP client as a snippet, or to your team through overgo. |
 
-## The app
+## Ways in
 
-- **Overview:** the Build → Try → Shape → Publish checklist with the next step, what agents are told (description and instructions), and the readiness check.
-- **Requests:** the workbench. The list sits on the left, the request in the middle, and the response, the exact request sent, and history on the right. Each request also has an **As a tool** tab: offered or not, name, safety, description and response limit. The values you last sent are kept as the request's example.
-- **Environments:** colour-coded (blue local, amber test, red production). Each has a base URL, a sign-in whose secrets are kept **in the keychain**, `{{variables}}`, headers, and a read-only/writes switch. Allowing writes on production means typing its name.
-- **Publish:** three destinations. **This Mac** gives copy-paste setup for Claude Code/overcli, Codex and generic MCP JSON. **Your org** hands the API to overgo through overcli. **A file** exports the project.
-- **Settings:** theme, AI CLI and model, projects folder, request timeout, and the status of the keychain and the overcli link.
+- **A server on this Mac.** New API lists what's listening locally — `:4010 node · orders-api — spec · 24` — and imports a served spec in one click. When the spec is behind a login, paste a token and it fetches it anyway; when there is no spec at all, **Read its code** has claude read the service's routes, request and response classes and sign-in (read-only) and draft every endpoint.
+- **Import.** OpenAPI 3, Swagger 2, a HAR capture, a Postman v2 collection, or a WSDL.
+- **From a cURL.** "Copy as cURL" from the browser: ids in the path become arguments, the values become the example, any token goes to the keychain.
+- **From documentation.** PDFs, Markdown or HTML, a docs URL, or pasted text. claude finds the real spec files if the site links to them, and drafts one if it doesn't.
+- **Record a web app.** Sign in and use the app in overapi's browser — or your own Chrome, password manager and all — and its API calls become requests. Or let **Explore for me** click around on its own, skipping anything that looks like delete, pay or sign out.
+- **SOAP.** Each operation becomes a request with typed arguments; overapi builds the envelope (1.1 or 1.2, WS-Security if needed) and agents see JSON in and out.
 
-## Publishing to overgo
+## The workbench
 
-1. **Publish → Your org** writes the project into `~/.overcli/inbox/apis/`. It includes only the chosen environment and the tools that are on, plus the *names* of the secrets, never their values. The button only appears once overcli has created that folder.
-2. overcli sends it to the org's control plane with your sign-in.
-3. An admin finishes it in overgo's console under **Setup → APIs**, choosing read-only or writes and typing the secrets there.
-4. overgo runs `overapi serve` as a tool that workers can be given.
+- **Params as a query, not a form.** What's being sent sits on top, one line each; everything else the request takes waits below as chips. Each kind of value gets its own control: a three-way *any · true · false* switch, chips for lists, a stepper for numbers, fields for objects. The address bar spells out the query as you go, and pasting a URL fills the params from it.
+- **Values it has already seen.** Click an id and pick from the ones earlier responses held, by name — "Acme Supply Co", not `076f0e8a…`. Nothing seen yet? Run the request that lists them, from the same dropdown.
+- **Chains.** overapi works out which request gives the ids another needs (`list_accounts → content[0].id → get_account.accountId`), keeps them for the next call, and runs a login first when the API needs one.
+- **Environments.** Local, staging and production, colour-coded, each with its base URL, sign-in, variables and headers. New environments start read-only; allowing writes on production means typing its name.
+- **Sign-in, however it works.** A token, an API key, user and password, WS-Security, a login request (refreshed when refused), the session from a browser sign-in — or **another API's**. When a sign-in runs out, *Sign in again* redoes it the right way and resends.
+- **Tests and load.** Turn a recording into a test that checks status and response shape, run it in CI (`overapi test --junit`), and load-test its reads with a live chart and every failure explained.
 
-overapi owns the format: `src/shared/overgo.ts`.
+## Agent-ready
+
+- **Make it agent-ready.** Tidies what a recording picked up, fixes values that never change, connects the chains, then your claude or codex writes descriptions, argument help, clearer names, what to hide, a brief for the agent and example questions. You see every change, before → after, and the readiness and security scores move as you pick.
+- **Tools.** A budget bar, suggestions for what to turn off and why, and a per-tool editor.
+- **Security scan.** Leaked secrets, what agents can reach, prompt injection in descriptions, personal data in examples. Critical findings block team publishing until fixed or accepted with a reason.
+- **Try as an agent.** Ask a question in plain words; claude answers through this API's own MCP server, read-only, and you watch every tool call. Save the run as a test.
+
+## Workspaces
+
+Services that belong together — the APIs of one product — grouped, with **one sign-in** (the security service signs the others in), **one place to set where each runs** in every environment, and **one MCP server** for the lot, with ids flowing from one service to the next.
+
+## Publish
+
+- **This Mac.** *Add to Claude Code* installs it (per environment); snippets for Codex and any MCP client carry placeholders, never secrets.
+- **Your team.** Hand it to overgo through overcli: only the chosen environment, the tools that are on, and the *names* of its secrets. An admin finishes it in overgo's console.
+- **A file.** `overapi.json` — readable, diffable, and what `overapi serve` runs.
 
 ## Safety
 
-- Tools are classed as read, write or destructive. `POST …/search` counts as a read; `DELETE` and `POST …/delete` are destructive.
-- Environments start read-only. Write tools stay hidden until an environment allows writes, and destructive tools also need `confirm: true` and carry `destructiveHint`.
-- Secrets are never stored in the project, never kept from a capture or cURL, and replaced with ••• in anything shown.
+- Tools are read, write or destructive. Write tools stay hidden until an environment allows writes; destructive ones also need `confirm: true` and carry `destructiveHint`, so clients ask you first.
+- Secrets live in the keychain, never in a project file, and are scrubbed from everything shown or returned. The renderer can set a secret but never read one.
+- Your browser sign-ins are yours: they never publish.
+- AI runs use your own CLI and login, with file-reading tools only.
+
+More in [SECURITY.md](SECURITY.md).
 
 ## CLI
 
+The app is also a command line — the same code an MCP client runs.
+
 ```sh
-npm run build:main
-node dist/cli/index.js import examples/acme-orders.openapi.yaml -o ~/overapi/acme-orders
-node dist/cli/index.js check   ~/overapi/acme-orders/overapi.json
-node dist/cli/index.js call    ~/overapi/acme-orders/overapi.json list_orders --env local --args '{"status":"open"}'
-node dist/cli/index.js serve   ~/overapi/acme-orders/overapi.json --env local     # what clients run
-node dist/cli/index.js install ~/overapi/acme-orders/overapi.json --env local     # prints the client config
+overapi import  examples/acme-orders.openapi.yaml -o ~/overapi/acme-orders
+overapi check   ~/overapi/acme-orders/overapi.json        # what will trip an agent up
+overapi call    ~/overapi/acme-orders/overapi.json list_orders --env local --args '{"status":"open"}'
+overapi serve   ~/overapi/acme-orders/overapi.json --env local   # what clients run
+overapi test    ~/overapi/acme-orders/overapi.json --junit results.xml
+overapi load    ~/overapi/acme-orders/overapi.json --scenario checkout --users 20 --duration 30
+overapi scan    ~/overapi/acme-orders/overapi.json --fail-on high
 ```
 
-The packaged app takes the same `serve` arguments, and when it runs that way it also reads secrets saved in the app's keychain.
+`overapi serve` also takes a workspace file and serves all its APIs as one server. From a checkout, use `node dist/cli/index.js` in place of `overapi`.
 
-## Develop
+## Run it
+
+Requires Node.js 22.12 or newer and macOS.
 
 ```sh
 npm install
-npm run example:server   # fictional Acme Orders API on :4010, token dev-token
-npm run dev              # the app (Vite on 5473)
+npm run dev              # Vite + Electron
+npm run example:server   # a sample REST API: Acme Orders on :4010, token dev-token
+npm run example:soap     # a sample SOAP service: Acme Inventory on :8089
 npm test
-npm run typecheck
 ```
 
-```
-src/shared   project model, cURL, naming, safety, readiness, install snippets, overgo format
-src/core     importers, discovery, HTTP runtime, MCP server, AI CLI runners — never imports electron
-src/cli      the command line, under plain Node
-src/main     Electron main: keychain, settings, history, overcli handoff, IPC
-src/renderer the app
-```
+| Folder | |
+|---|---|
+| `src/core` | Importers, HTTP and SOAP calls, sign-in, the MCP server, tests and load — never imports Electron |
+| `src/shared` | The project model, chains, checks, the security scan, workspaces |
+| `src/main` | Electron main: keychain, recording browser, Chrome recording, explorer, AI runs |
+| `src/renderer` | The app — React, Zustand, Tailwind |
+| `src/cli` | The command line, under plain Node |
 
-## SOAP
+## Status
 
-overapi reads SOAP services as well as REST ones. Import a WSDL (often the
-service address with `?wsdl`) and each operation becomes a request, its
-arguments typed from the schema; or record the service, and calls to its
-one address split by operation. overapi builds the envelope (SOAP 1.1 or
-1.2, with a WS-Security UsernameToken if the environment signs in that way),
-and agents send and receive JSON: the response body is converted, and a SOAP
-Fault comes back as an error with its message.
+Pre-1.0, building in the open with Owen Farr. See the [CHANGELOG](CHANGELOG.md) for what's in it.
 
-Try it on the sample service:
+## License
 
-```sh
-npm run example:soap   # http://localhost:8089/soap/inventory?wsdl
-```
-
-Import `http://localhost:8089/soap/inventory?wsdl`, then set the
-environment's sign-in to WS-Security: user `acme`, password `s3cret-pass`.
+[Apache-2.0](LICENSE). The overapi name and logo are covered by [TRADEMARKS.md](TRADEMARKS.md).

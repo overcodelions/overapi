@@ -23,7 +23,7 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "dev": "npm run build:main && concurrently -k -n vite,tsc,electron -c cyan,yellow,magenta \"npm:dev:renderer\" \"npm:dev:tsc\" \"npm:dev:electron\"",
+    "dev": "node scripts/dev.mjs",
     "dev:renderer": "vite",
     "dev:tsc": "tsc -p tsconfig.main.json --watch --preserveWatchOutput",
     "dev:electron": "node scripts/dev-electron.mjs",
@@ -39,6 +39,8 @@
     "dist:mac": "npm run build && electron-builder --mac",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "security:aws-account-ids": "node scripts/check-no-aws-account-ids.mjs",
     "security:identities": "node scripts/check-no-forbidden-identities.mjs --all",
     "icons": "sh scripts/make-icons.sh"
   },
@@ -79,6 +81,7 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "@vitest/coverage-v8": "4.1.11",
     "autoprefixer": "^10.4.20",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",

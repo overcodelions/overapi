@@ -70,7 +70,11 @@ export function RecorderView(): JSX.Element {
       setCalls([]);
       setApiHost('');
       setRunning({ port, target: '', mode: 'browser', site: b.site });
-      return say(via === 'chrome' ? `Recording in ${info?.chrome ?? 'Chrome'}. Sign in and use the app as usual; close its tab or press Stop when you’re done.` : 'Recording in overapi’s browser. Sign in and use the app as usual; close the window or press Stop when you’re done.');
+      return say(
+        via === 'chrome'
+          ? `Recording in ${info?.chrome ?? 'Chrome'}. Sign in and use the app as usual; close its tab or press Stop when you’re done.`
+          : 'Recording in overapi’s browser. Sign in and use the app as usual; close the window or press Stop when you’re done.',
+      );
     }
     const r = await window.overapi.invoke('recorder:start', target.trim(), port);
     setBusy(false);
@@ -101,7 +105,14 @@ export function RecorderView(): JSX.Element {
                 ['browser', 'Browser'],
               ] as const
             ).map(([id, label]) => (
-              <button key={id} role="tab" aria-selected={mode === id} disabled={!!running} onClick={() => setMode(id)} className={`rounded px-2.5 py-1 text-[12px] ${mode === id ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}>
+              <button
+                key={id}
+                role="tab"
+                aria-selected={mode === id}
+                disabled={!!running}
+                onClick={() => setMode(id)}
+                className={`rounded px-2.5 py-1 text-[12px] ${mode === id ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}
+              >
                 {label}
               </button>
             ))}
@@ -118,37 +129,44 @@ export function RecorderView(): JSX.Element {
                 onKeyDown={(e) => e.key === 'Enter' && !running && site.trim() && void start()}
               />
               {info?.chrome && (
-            <select className="field w-auto py-1 text-[12px]" value={via} disabled={!!running} onChange={(e) => setVia(e.target.value as BrowserVia)} aria-label="Which browser" title="overapi’s window is simplest. Your Chrome brings extensions — a password manager — on a profile of overapi’s own.">
-              <option value="overapi">in overapi’s window</option>
-              <option value="chrome">in {info.chrome} (with extensions)</option>
-            </select>
-          )}
+                <select
+                  className="field w-auto py-1 text-[12px]"
+                  value={via}
+                  disabled={!!running}
+                  onChange={(e) => setVia(e.target.value as BrowserVia)}
+                  aria-label="Which browser"
+                  title="overapi’s window is simplest. Your Chrome brings extensions — a password manager — on a profile of overapi’s own."
+                >
+                  <option value="overapi">in overapi’s window</option>
+                  <option value="chrome">in {info.chrome} (with extensions)</option>
+                </select>
+              )}
             </>
           ) : (
-          <>
-          <span className="text-ink-muted">Listen on</span>
-          <div className="field flex w-auto items-center gap-0 p-0">
-            <span className="py-1.5 pl-2.5 font-mono text-[12px] text-ink-faint">http://localhost:</span>
-            <input
-              className="w-16 bg-transparent py-1.5 pr-2 font-mono text-[12px] outline-none"
-              type="number"
-              value={port}
-              disabled={!!running}
-              onChange={(e) => setPort(Number(e.target.value) || 4545)}
-              aria-label="Port"
-            />
-          </div>
-          <Icon name="send" size={14} className="text-ink-faint" />
-          <span className="text-ink-muted">forward to</span>
-          <input
-            className="field w-[420px] font-mono text-[12px]"
-            placeholder="https://api.acme.example/v1"
-            value={target}
-            disabled={!!running}
-            onChange={(e) => setTarget(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !running && target.trim() && void start()}
-          />
-          </>
+            <>
+              <span className="text-ink-muted">Listen on</span>
+              <div className="field flex w-auto items-center gap-0 p-0">
+                <span className="py-1.5 pl-2.5 font-mono text-[12px] text-ink-faint">http://localhost:</span>
+                <input
+                  className="w-16 bg-transparent py-1.5 pr-2 font-mono text-[12px] outline-none"
+                  type="number"
+                  value={port}
+                  disabled={!!running}
+                  onChange={(e) => setPort(Number(e.target.value) || 4545)}
+                  aria-label="Port"
+                />
+              </div>
+              <Icon name="send" size={14} className="text-ink-faint" />
+              <span className="text-ink-muted">forward to</span>
+              <input
+                className="field w-[420px] font-mono text-[12px]"
+                placeholder="https://api.acme.example/v1"
+                value={target}
+                disabled={!!running}
+                onChange={(e) => setTarget(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !running && target.trim() && void start()}
+              />
+            </>
           )}
           {running ? (
             <button
@@ -182,7 +200,7 @@ export function RecorderView(): JSX.Element {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-good" />
             </span>
             <span className="flex-1">
-              Recording in {via === 'chrome' ? info?.chrome ?? 'Chrome' : 'overapi’s browser'} — <span className="font-mono">{running.site}</span>. Sign in and use the app; its calls appear below.
+              Recording in {via === 'chrome' ? (info?.chrome ?? 'Chrome') : 'overapi’s browser'} — <span className="font-mono">{running.site}</span>. Sign in and use the app; its calls appear below.
             </span>
             <button className="btn" onClick={() => void window.overapi.invoke('recorder:showBrowser')}>
               Show browser
@@ -204,7 +222,11 @@ export function RecorderView(): JSX.Element {
         )}
         {(running?.mode === 'browser' || browserCalls) && (
           <div className="mt-3">
-            <CoverageBar calls={scoped} canExplore={running?.mode === 'browser' && via !== 'chrome'} note={via === 'chrome' ? 'Exploring works in overapi’s own window, not Chrome' : 'Start recording in the browser first'} />
+            <CoverageBar
+              calls={scoped}
+              canExplore={running?.mode === 'browser' && via !== 'chrome'}
+              note={via === 'chrome' ? 'Exploring works in overapi’s own window, not Chrome' : 'Start recording in the browser first'}
+            />
           </div>
         )}
         {running?.mode === 'proxy' && (
@@ -214,8 +236,7 @@ export function RecorderView(): JSX.Element {
               <span className="relative inline-flex h-2 w-2 rounded-full bg-good" />
             </span>
             <span className="flex-1">
-              Recording — use <b className="font-mono">{local}</b> wherever you’d use <span className="font-mono">{running.target}</span>. Try{' '}
-              <span className="font-mono">curl {local}/…</span>
+              Recording — use <b className="font-mono">{local}</b> wherever you’d use <span className="font-mono">{running.target}</span>. Try <span className="font-mono">curl {local}/…</span>
             </span>
             <button
               className="btn"
@@ -253,7 +274,15 @@ export function RecorderView(): JSX.Element {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
             {scoped.length === 0 && (
-              <Empty>{running ? (running.mode === 'browser' ? 'Waiting for the app’s first call — sign in and click around…' : 'Waiting for the first call…') : mode === 'browser' ? 'Open the web app, sign in and use it.' : 'Start recording, then use the API through the local address.'}</Empty>
+              <Empty>
+                {running
+                  ? running.mode === 'browser'
+                    ? 'Waiting for the app’s first call — sign in and click around…'
+                    : 'Waiting for the first call…'
+                  : mode === 'browser'
+                    ? 'Open the web app, sign in and use it.'
+                    : 'Start recording, then use the API through the local address.'}
+              </Empty>
             )}
             {shown.map((c) => (
               <button
@@ -264,7 +293,13 @@ export function RecorderView(): JSX.Element {
                 <Method method={c.method as HttpMethod} />
                 <span className="min-w-0 flex-1 truncate font-mono text-[12px]">{c.path}</span>
                 {c.replayOf && <span className="rounded bg-wash-strong px-1 text-[10px] text-ink-faint">replay</span>}
-                <span className={`font-mono text-[11px] font-semibold ${c.error || c.status >= 400 ? 'text-bad' : 'text-good'}`}>{c.status}</span>
+                {c.error?.startsWith('Not sent') ? (
+                  <span className="shrink-0 rounded bg-wash-strong px-1 text-[10px] font-medium text-ink-muted" title={c.error}>
+                    not sent
+                  </span>
+                ) : (
+                  <span className={`font-mono text-[11px] font-semibold ${c.error || c.status >= 400 ? 'text-bad' : 'text-good'}`}>{c.status}</span>
+                )}
                 <span className="w-12 text-right text-[10px] tabular-nums text-ink-faint">{c.ms} ms</span>
               </button>
             ))}
@@ -273,23 +308,49 @@ export function RecorderView(): JSX.Element {
 
         <Splitter width={callsW} setWidth={setCallsW} initial={380} />
         {/* Detail */}
-        <div className="min-w-0 flex-1">{call ? <CallDetail key={call.id} call={call} edges={edges} calls={calls} base={running?.target ?? target} onPick={setSelected} /> : <Empty>Pick a call to see exactly what went out and what came back.</Empty>}</div>
+        <div className="min-w-0 flex-1">
+          {call ? (
+            <CallDetail key={call.id} call={call} edges={edges} calls={calls} base={running?.target ?? target} onPick={setSelected} />
+          ) : (
+            <Empty>Pick a call to see exactly what went out and what came back.</Empty>
+          )}
+        </div>
 
         {/* Graph + build */}
         <Splitter width={sideW} setWidth={setSideW} side="right" initial={380} />
         <div className="flex shrink-0 flex-col" style={{ width: sideW }}>
-          <GraphPanel calls={scoped} edges={edges} onPick={setSelected} target={browserCalls ? api : (running?.target ?? target)} onBuilt={async (path, note) => {
-            await refreshProjects();
-            await open(path, 'requests');
-            say(note);
-          }} />
+          <GraphPanel
+            calls={scoped}
+            edges={edges}
+            onPick={setSelected}
+            target={browserCalls ? api : (running?.target ?? target)}
+            onBuilt={async (path, note) => {
+              await refreshProjects();
+              await open(path, 'requests');
+              say(note);
+            }}
+          />
         </div>
       </div>
     </div>
   );
 }
 
-export function CallDetail({ call, edges, calls, mark, base, onPick }: { call: RecordedCall; edges: GraphEdge[]; calls: RecordedCall[]; mark?: React.ReactNode; base?: string; onPick?: (id: string) => void }): JSX.Element {
+export function CallDetail({
+  call,
+  edges,
+  calls,
+  mark,
+  base,
+  onPick,
+}: {
+  call: RecordedCall;
+  edges: GraphEdge[];
+  calls: RecordedCall[];
+  mark?: React.ReactNode;
+  base?: string;
+  onPick?: (id: string) => void;
+}): JSX.Element {
   const [tab, setTab] = useState<'request' | 'response'>('response');
   const [menu, setMenu] = useState(false);
   const [replaying, setReplaying] = useState(false);
@@ -321,7 +382,9 @@ export function CallDetail({ call, edges, calls, mark, base, onPick }: { call: R
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-3 border-b border-rule px-4 py-3">
         <Method method={call.method as HttpMethod} wide />
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={call.url}>{call.url ?? call.path}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px]" title={call.url}>
+          {call.url ?? call.path}
+        </span>
         <span className={`rounded px-2 py-0.5 font-mono text-[12px] font-semibold ${call.error || call.status >= 400 ? 'bg-bad/15 text-bad' : 'bg-good/15 text-good'}`}>
           {call.status} {call.statusText}
         </span>
@@ -393,23 +456,37 @@ export function CallDetail({ call, edges, calls, mark, base, onPick }: { call: R
         {body ? <JsonView text={body} /> : <p className="text-[12px] text-ink-faint">No body.</p>}
         <details className="rounded-lg border border-rule bg-wash">
           <summary className="cursor-pointer px-3 py-2 text-[11px] text-ink-muted">Headers · {Object.keys(headers).length}</summary>
-        <div className="border-t border-rule p-3 font-mono text-[11px] leading-relaxed">
-          {Object.entries(headers).map(([k, v]) => (
-            <div key={k} className="break-all">
-              <span className="text-sky-700 dark:text-sky-300">{k}</span>
-              <span className="text-ink-faint">: </span>
-              <span className="text-ink-muted">{/^(authorization|cookie|set-cookie|x-api-key)$|csrf|xsrf|token/i.test(k) ? `${v.slice(0, 12)}•••` : v}</span>
-            </div>
-          ))}
-          {!Object.keys(headers).length && <span className="text-ink-faint">no headers</span>}
-        </div>
+          <div className="border-t border-rule p-3 font-mono text-[11px] leading-relaxed">
+            {Object.entries(headers).map(([k, v]) => (
+              <div key={k} className="break-all">
+                <span className="text-sky-700 dark:text-sky-300">{k}</span>
+                <span className="text-ink-faint">: </span>
+                <span className="text-ink-muted">{/^(authorization|cookie|set-cookie|x-api-key)$|csrf|xsrf|token/i.test(k) ? `${v.slice(0, 12)}•••` : v}</span>
+              </div>
+            ))}
+            {!Object.keys(headers).length && <span className="text-ink-faint">no headers</span>}
+          </div>
         </details>
       </div>
     </div>
   );
 }
 
-export function GraphPanel({ calls, edges, onPick, target, onBuilt, embedded }: { calls: RecordedCall[]; edges: GraphEdge[]; onPick: (id: string) => void; target: string; onBuilt?: (path: string, note: string) => void; embedded?: boolean }): JSX.Element {
+export function GraphPanel({
+  calls,
+  edges,
+  onPick,
+  target,
+  onBuilt,
+  embedded,
+}: {
+  calls: RecordedCall[];
+  edges: GraphEdge[];
+  onPick: (id: string) => void;
+  target: string;
+  onBuilt?: (path: string, note: string) => void;
+  embedded?: boolean;
+}): JSX.Element {
   const [title, setTitle] = useState('');
   const [signIn, setSignIn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -455,58 +532,58 @@ export function GraphPanel({ calls, edges, onPick, target, onBuilt, embedded }: 
       {view === 'latency' ? (
         <LatencyPanel calls={calls} onPick={onPick} />
       ) : (
-      <>
-      <p className="px-4 pt-3 text-[11px] text-ink-faint">Values that came out of one response and went into a later request.</p>
-      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
-        {edges.length === 0 && <p className="text-[12px] text-ink-faint">{calls.length ? 'No links yet — calls that reuse an id or a token show up here.' : 'Nothing recorded yet.'}</p>}
+        <>
+          <p className="px-4 pt-3 text-[11px] text-ink-faint">Values that came out of one response and went into a later request.</p>
+          <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+            {edges.length === 0 && <p className="text-[12px] text-ink-faint">{calls.length ? 'No links yet — calls that reuse an id or a token show up here.' : 'Nothing recorded yet.'}</p>}
 
-        {authLinks.length > 0 && !embedded && (
-          <div className="space-y-2">
-            <div className="label">Looks like a sign-in</div>
-            {authLinks.map((l, i) => (
-              <LinkCard key={i} link={l} onPick={onPick} tone="auth" />
-            ))}
-            <label className="flex items-start gap-2 rounded-lg bg-wash p-3 text-[12px]">
-              <input type="checkbox" className="mt-0.5" checked={signIn} onChange={(e) => setSignIn(e.target.checked)} />
-              <span>
-                <b>Use it as the API’s sign-in</b> — overapi runs it before calls that need the token, and again on a 401. Any password it sent goes to the keychain. Off: it
-                stays an ordinary request.
-              </span>
-            </label>
-          </div>
-        )}
+            {authLinks.length > 0 && !embedded && (
+              <div className="space-y-2">
+                <div className="label">Looks like a sign-in</div>
+                {authLinks.map((l, i) => (
+                  <LinkCard key={i} link={l} onPick={onPick} tone="auth" />
+                ))}
+                <label className="flex items-start gap-2 rounded-lg bg-wash p-3 text-[12px]">
+                  <input type="checkbox" className="mt-0.5" checked={signIn} onChange={(e) => setSignIn(e.target.checked)} />
+                  <span>
+                    <b>Use it as the API’s sign-in</b> — overapi runs it before calls that need the token, and again on a 401. Any password it sent goes to the keychain. Off: it stays an ordinary
+                    request.
+                  </span>
+                </label>
+              </div>
+            )}
 
-        {dataLinks.length > 0 && (
-          <div className="space-y-2">
-            <div className="label">Then — values passed along</div>
-            {dataLinks.map((l, i) => (
-              <LinkCard key={i} link={l} onPick={onPick} />
-            ))}
+            {dataLinks.length > 0 && (
+              <div className="space-y-2">
+                <div className="label">Then — values passed along</div>
+                {dataLinks.map((l, i) => (
+                  <LinkCard key={i} link={l} onPick={onPick} />
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      </>
+        </>
       )}
       {!embedded && (
-      <div className="space-y-2 border-t border-rule p-4">
-        <input className="field" placeholder="Name for the API (optional)" value={title} onChange={(e) => setTitle(e.target.value)} />
-        <button
-          className="btn-primary w-full"
-          disabled={busy || !calls.some((c) => !c.error)}
-          onClick={async () => {
-            setBusy(true);
-            const r = await window.overapi.invoke('recorder:build', { title: title.trim() || undefined, signIn, target });
-            setBusy(false);
-            if (r.ok) onBuilt?.(r.path, r.note ?? 'Built.');
-            else if (r.error) useStore.getState().say(r.error, true);
-          }}
-        >
-          {busy ? 'Building…' : `Build API from ${calls.filter((c) => !c.error).length} calls (${distinct} kinds)`}
-        </button>
-        <p className="text-[11px] leading-snug text-ink-faint">
-          Same importer as a HAR capture: ids become path params, values you sent become arguments, links become kept values. No token is kept. Everything starts read-only.
-        </p>
-      </div>
+        <div className="space-y-2 border-t border-rule p-4">
+          <input className="field" placeholder="Name for the API (optional)" value={title} onChange={(e) => setTitle(e.target.value)} />
+          <button
+            className="btn-primary w-full"
+            disabled={busy || !calls.some((c) => !c.error)}
+            onClick={async () => {
+              setBusy(true);
+              const r = await window.overapi.invoke('recorder:build', { title: title.trim() || undefined, signIn, target });
+              setBusy(false);
+              if (r.ok) onBuilt?.(r.path, r.note ?? 'Built.');
+              else if (r.error) useStore.getState().say(r.error, true);
+            }}
+          >
+            {busy ? 'Building…' : `Build API from ${calls.filter((c) => !c.error).length} calls (${distinct} kinds)`}
+          </button>
+          <p className="text-[11px] leading-snug text-ink-faint">
+            Same importer as a HAR capture: ids become path params, values you sent become arguments, links become kept values. No token is kept. Everything starts read-only.
+          </p>
+        </div>
       )}
     </div>
   );

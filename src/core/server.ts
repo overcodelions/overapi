@@ -20,6 +20,7 @@ import { ArgumentError } from './http';
 import { callTool, type Peer } from './flow';
 import type { VarSource } from './vars';
 import { mergedNames } from '../shared/system';
+import { looksSecret } from '../shared/scan';
 
 /// A system served as one server: its members as they are now.
 export interface SystemSource {
@@ -59,12 +60,25 @@ export function pickEnv(project: Project, envName?: string): EnvDef {
   return env;
 }
 
+/// An example worth showing an agent: a real, short value with nothing
+/// secret or templated in it.
+export function usableExample(v: unknown): boolean {
+  if (v === undefined || v === null || v === '') return false;
+  if (typeof v === 'string') return v.length <= 120 && !/\{\{|\$\{/.test(v) && !looksSecret(v);
+  if (typeof v === 'number' || typeof v === 'boolean') return true;
+  const text = JSON.stringify(v);
+  return text.length <= 300 && !/\{\{|\$\{/.test(text);
+}
+
 export function toMcpTool(tool: ToolDef): Tool {
   const properties: Record<string, object> = {};
   const required: string[] = [];
   for (const p of tool.params) {
     const description = [p.description ?? p.schema.description, p.in === 'header' ? '(sent as a header)' : ''].filter(Boolean).join(' ');
-    properties[p.name] = { ...p.schema, ...(description ? { description } : {}) };
+    // The value last sent, as a hint of what a real one looks like — never
+    // a chain variable, a secret, or anything long.
+    const ex = tool.example?.[p.name];
+    properties[p.name] = { ...p.schema, ...(description ? { description } : {}), ...(usableExample(ex) ? { examples: [ex] } : {}) };
     if (p.required) required.push(p.name);
   }
   if (tool.safety === 'destructive') {

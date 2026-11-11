@@ -22,6 +22,9 @@ interface Pending {
   extra?: Record<string, string>;
 }
 
+/// What a call the read-only guard stopped says (shared/readOnlyGuard.ts).
+export const NOT_SENT = 'Not sent — overapi was exploring, and only reads leave the browser then.';
+
 export const ENABLE_NETWORK = ['Network.enable', { maxPostDataSize: KEEP_REQUEST }] as const;
 
 export interface Tap {
@@ -128,7 +131,7 @@ export function createTap(send: Send, onCall: (c: RecordedCall) => void): Tap {
             pending.delete(params.requestId);
             return;
           }
-          void finish(params.requestId, params.timestamp, `The browser could not complete it: ${params.errorText}`);
+          void finish(params.requestId, params.timestamp, /BLOCKED_BY_CLIENT/.test(String(params.errorText)) ? NOT_SENT : `The browser could not complete it: ${params.errorText}`);
           return;
         }
       }

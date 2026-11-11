@@ -15,7 +15,7 @@
 import { BaseWindow, WebContentsView, session as electronSession } from 'electron';
 import type { RecordedCall } from '../shared/recording';
 import { createTap, ENABLE_NETWORK } from './networkTap';
-
+import { guardRequest } from '../shared/readOnlyGuard';
 
 export interface BrowserRecorder {
   site: string;
@@ -26,6 +26,9 @@ export interface BrowserRecorder {
   setNote(text: string): void;
   /// The site's page — for the explorer to drive.
   page: Electron.WebContents;
+  /// While on, only reads leave this window (shared/readOnlyGuard.ts);
+  /// everything else is stopped before it goes. Off: back to normal.
+  guard(on: { safeSearch: boolean; onBlocked: (method: string, url: string, why: string) => void; onFlood: (why: string) => void } | null): Promise<void>;
   stop(): void;
 }
 
@@ -78,7 +81,6 @@ export async function cookiesFor(site: string, url: string): Promise<{ name: str
   const list = await ses.cookies.get({ url });
   return list.map((c) => ({ name: c.name, value: c.value }));
 }
-
 
 export async function startBrowserRecorder(opts: {
   site: string;
@@ -153,20 +155,129 @@ export async function startBrowserRecorder(opts: {
 
   const dbg = wc.debugger;
   let stopped = false;
-  const tap = createTap((method, params) => dbg.sendCommand(method, params), (c) => !stopped && opts.onCall(c));
+  const tap = createTap(
+    (method, params) => (wc.isDestroyed() || !dbg.isAttached() ? Promise.reject(new Error('The page closed.')) : dbg.sendCommand(method, params)),
+    (c) => !stopped && opts.onCall(c),
+  );
 
   if (record) {
     // The debugger answers only once the window has a page: start blank,
     // switch recording on, then go to the site — so its first calls count.
     await wc.loadURL('about:blank');
     dbg.attach('1.3');
-    dbg.on('message', (_e, method, params) => tap.handle(method, params));
+    dbg.on('message', (_e, method, params) => {
+      if (stopped || wc.isDestroyed()) return;
+      tap.handle(method, params);
+    });
     await dbg.sendCommand(...ENABLE_NETWORK);
+  }
+
+  // The read-only guard, on the site's own session: every request from this
+  // page is checked before it goes; reads go on, the rest are cancelled —
+  // which the recording shows as not sent. Electron's own request hook, not
+  // the debugger: answering paused requests through the debugger from its
+  // own message callback crashed the app on busy pages.
+  let guarding: { safeSearch: boolean; onBlocked: (method: string, url: string, why: string) => void; onFlood: (why: string) => void } | null = null;
+  // The circuit breaker: a page that answers a blocked request by retrying
+  // or reloading in a loop can send hundreds of requests a second and
+  // swamp the network. Past these, everything is cancelled and exploring
+  // stops — the network matters more than the coverage.
+  const PER_SECOND = 60;
+  const HOT_SECONDS = 3;
+  const SAME_BLOCKED = 20;
+  const TOTAL = 4000;
+  let flooded = false;
+  let total = 0;
+  let second = 0;
+  let inSecond = 0;
+  let hotSeconds = 0;
+  const blockedRecent = new Map<string, number[]>();
+  const trip = (why: string) => {
+    if (flooded) return;
+    flooded = true;
+    try {
+      if (!wc.isDestroyed()) {
+        wc.stop();
+        // A blank page ends the loop for good; ⌘R or the address brings the site back.
+        void wc.loadURL('about:blank').catch(() => undefined).finally(() => {
+          flooded = false;
+          hotSeconds = 0;
+        });
+      }
+    } catch {
+      /* closing */
+    }
+    if (!bar.webContents.isDestroyed()) void bar.webContents.executeJavaScript(`window.setNote && setNote(${JSON.stringify(`Paused the page to protect your network: ${why}`)})`).catch(() => undefined);
+    guarding?.onFlood(why);
+  };
+  const guard = async (on: typeof guarding) => {
+    guarding = on;
+    flooded = false;
+    total = 0;
+    hotSeconds = 0;
+    inSecond = 0;
+    blockedRecent.clear();
+    // Done exploring: stop whatever the last page was still doing, so a
+    // page left mid-loop doesn't keep hammering the network.
+    if (!on && !wc.isDestroyed()) {
+      try {
+        wc.stop();
+      } catch {
+        /* closing */
+      }
+    }
+  };
+  // One request hook for the window's whole life: the breaker always (any
+  // page that goes into a request loop is stopped), the read-only guard
+  // while exploring.
+  if (record) {
+    wc.session.webRequest.onBeforeRequest((details, callback) => {
+      try {
+        if (stopped || details.webContentsId !== wc.id) return callback({});
+        if (flooded) return callback({ cancel: true });
+        const now = Date.now();
+        const sec = Math.floor(now / 1000);
+        if (sec !== second) {
+          hotSeconds = inSecond > PER_SECOND ? hotSeconds + 1 : 0;
+          second = sec;
+          inSecond = 0;
+        }
+        inSecond++;
+        if (guarding) total++;
+        if (hotSeconds >= HOT_SECONDS) {
+          trip(`the page sent over ${PER_SECOND} requests a second for ${HOT_SECONDS} seconds — likely a retry or reload loop`);
+          return callback({ cancel: true });
+        }
+        if (guarding && total > TOTAL) {
+          trip(`it reached ${TOTAL} requests in one exploring session`);
+          return callback({ cancel: true });
+        }
+        if (!guarding) return callback({});
+        const body = details.uploadData?.map((d) => (d.bytes ? Buffer.from(d.bytes).toString('utf8') : '')).join('');
+        const verdict = guardRequest(details.method, details.url, body, guarding.safeSearch);
+        if (verdict.send) return callback({});
+        guarding.onBlocked(details.method, details.url, verdict.why);
+        const key = `${details.method} ${details.url.split('?')[0]}`;
+        const times = (blockedRecent.get(key) ?? []).filter((t) => now - t < 10_000);
+        times.push(now);
+        blockedRecent.set(key, times);
+        if (times.length > SAME_BLOCKED) trip(`the page kept retrying ${key} after it was blocked — a loop`);
+        callback({ cancel: true });
+      } catch {
+        callback({});
+      }
+    });
   }
 
   const stop = () => {
     if (stopped) return;
     stopped = true;
+    guarding = null;
+    try {
+      if (!wc.isDestroyed()) wc.session.webRequest.onBeforeRequest(null);
+    } catch {
+      /* closing */
+    }
     tap.stop();
     try {
       if (dbg.isAttached()) dbg.detach();
@@ -212,11 +323,13 @@ export async function startBrowserRecorder(opts: {
       void wc.loadURL(u.toString()).catch(() => undefined);
       return;
     }
-    const why =
-      /CONNECTION_REFUSED/.test(description) ? 'Nothing is answering there — is the app running, and on that port?'
-      : /NAME_NOT_RESOLVED/.test(description) ? 'That host name doesn’t resolve. Check the address.'
-      : /CERT|SSL/.test(description) ? 'Its HTTPS certificate was refused. If it’s plain http, use http:// in the address.'
-      : 'Check the address, then press ⌘R to try again.';
+    const why = /CONNECTION_REFUSED/.test(description)
+      ? 'Nothing is answering there — is the app running, and on that port?'
+      : /NAME_NOT_RESOLVED/.test(description)
+        ? 'That host name doesn’t resolve. Check the address.'
+        : /CERT|SSL/.test(description)
+          ? 'Its HTTPS certificate was refused. If it’s plain http, use http:// in the address.'
+          : 'Check the address, then press ⌘R to try again.';
     const esc = (x: string) => x.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
     const html = `<!doctype html><meta charset="utf-8"><title>Couldn’t open it</title><body style="font:14px -apple-system,system-ui,sans-serif;color:#222;background:#f6f6f8;display:grid;place-items:center;height:100vh;margin:0"><div style="max-width:520px;padding:24px"><h2 style="margin:0 0 8px;font-weight:600">Couldn’t open ${esc(url)}</h2><p style="color:#555;margin:0 0 12px">${esc(why)}</p><code style="color:#999;font-size:12px">${esc(description)} (${code})</code><p style="color:#777;margin-top:16px;font-size:13px">Still recording. Fix the address in overapi and press Stop, then start again — or press ⌘R here once it’s up.</p></div></body>`;
     void wc.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => undefined);
@@ -234,6 +347,7 @@ export async function startBrowserRecorder(opts: {
     window: win,
     stop,
     page: wc,
+    guard,
     setNote: (text) => {
       if (!bar.webContents.isDestroyed()) void bar.webContents.executeJavaScript(`window.setNote && setNote(${JSON.stringify(text)})`).catch(() => undefined);
     },

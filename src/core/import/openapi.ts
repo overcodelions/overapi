@@ -210,7 +210,7 @@ function envsFrom(doc: Obj, swagger2: boolean, auth: AuthSpec, ref?: string): En
       if (!s?.url) continue;
       let url = String(s.url);
       for (const [k, v] of Object.entries((s.variables ?? {}) as Obj)) url = url.replaceAll(`{${k}}`, String(v?.default ?? ''));
-      // A relative server ("/api/v3", as Petstore has) is relative to where
+      // A relative server ("/api/v3", as Acme Pet Store has) is relative to where
       // the spec was fetched from. Imported from a file there is nothing to
       // resolve it against; it stays, and the readiness check says so.
       if (!/^https?:\/\//i.test(url) && ref && /^https?:\/\//i.test(ref)) {

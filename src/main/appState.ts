@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { HistoryEntry, Published, Settings } from '../shared/ipc';
+import { mergeSeen } from '../shared/seen';
 
 const dir = () => app.getPath('userData');
 
@@ -175,7 +176,6 @@ export function seenFor(p: string): SeenStore {
 
 export function recordSeen(p: string, env: string, toolId: string, fresh: import('../shared/seen').SeenPaths): void {
   if (!Object.keys(fresh).length) return;
-  const { mergeSeen } = require('../shared/seen') as typeof import('../shared/seen');
   const all = seenFor(p);
   const byEnv = (all[env] ??= {});
   byEnv[toolId] = mergeSeen(byEnv[toolId] ?? {}, fresh);

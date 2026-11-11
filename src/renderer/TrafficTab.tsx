@@ -73,6 +73,19 @@ export function TrafficTab(): JSX.Element {
   const unknown = scoped.filter((c) => !c.error && !toolOf(c));
   const newRoutes = [...new Set(unknown.map((c) => `${c.method} ${routeOf(c.path)}`))];
   const known = [...new Map(scoped.filter((c) => !c.error && c.status < 400).map((c) => [toolOf(c)?.id, c] as const)).entries()].filter(([id]) => id);
+  /// The latest call's arguments as a request's example — keeping any
+  /// argument wired to a chain or variable ({{…}}), which a fixed value
+  /// would undo.
+  const exampleFrom = (t: (typeof p.tools)[number], c: RecordedCall) => {
+    const fresh = argsFromCall(t, c, base);
+    for (const [k, v] of Object.entries(t.example ?? {})) if (typeof v === 'string' && /^\{\{.+\}\}$/.test(v)) fresh[k] = v;
+    return fresh;
+  };
+  // Only the ones whose saved example differs from what was just seen.
+  const stale = known.filter(([id, c]) => {
+    const t = p.tools.find((x) => x.id === id);
+    return !!t && JSON.stringify(exampleFrom(t, c)) !== JSON.stringify(t.example ?? {});
+  });
   const signIn = useMemo(() => (env && env.auth.type !== 'login' ? suggestSignIn(p, scoped, edges, base) : undefined), [p, scoped, edges, base, env]);
   const failing = endpointStats(scoped).filter((s) => s.errors === s.count && s.count > 0);
   const call = calls.find((c) => c.id === selected) ?? null;
@@ -83,7 +96,12 @@ export function TrafficTab(): JSX.Element {
     if (mode === 'browser') {
       const r = await window.overapi.invoke('recorder:browse', site, path!, env.baseUrl, via);
       setBusy(false);
-      if (r.ok) say(via === 'chrome' ? `Recording ${p.title} in ${info?.chrome ?? 'Chrome'}. Sign in and use the app; close its tab or press Stop when you're done.` : `Recording ${p.title} in overapi's browser. Sign in and use the app; close the window or press Stop when you're done.`);
+      if (r.ok)
+        say(
+          via === 'chrome'
+            ? `Recording ${p.title} in ${info?.chrome ?? 'Chrome'}. Sign in and use the app; close its tab or press Stop when you're done.`
+            : `Recording ${p.title} in overapi's browser. Sign in and use the app; close the window or press Stop when you're done.`,
+        );
       else say(r.error, true);
       return;
     }
@@ -112,9 +130,15 @@ export function TrafficTab(): JSX.Element {
   // way, with the start controls — or the recording strip — across the top.
   const startBar = elsewhere ? (
     <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-warn/10 px-4 py-2.5 text-[12px]">
-      <span className="flex-1">The recorder is busy with <span className="font-mono">{recorder.target}</span>. One recording at a time.</span>
-      <button className="btn" onClick={openRecorder}>Open it</button>
-      <button className="btn" onClick={() => void window.overapi.invoke('recorder:stop')}>Stop it</button>
+      <span className="flex-1">
+        The recorder is busy with <span className="font-mono">{recorder.target}</span>. One recording at a time.
+      </span>
+      <button className="btn" onClick={openRecorder}>
+        Open it
+      </button>
+      <button className="btn" onClick={() => void window.overapi.invoke('recorder:stop')}>
+        Stop it
+      </button>
     </div>
   ) : (
     <div className="flex flex-wrap items-center gap-2 border-b border-rule px-4 py-2.5 text-[12px]">
@@ -125,7 +149,14 @@ export function TrafficTab(): JSX.Element {
             ['browser', 'Browser', "Use the web app in overapi's own browser window — for apps with no public API"],
           ] as const
         ).map(([id, label, tip]) => (
-          <button key={id} role="tab" aria-selected={mode === id} title={tip} onClick={() => setMode(id)} className={`rounded px-2.5 py-1 text-[12px] ${mode === id ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}>
+          <button
+            key={id}
+            role="tab"
+            aria-selected={mode === id}
+            title={tip}
+            onClick={() => setMode(id)}
+            className={`rounded px-2.5 py-1 text-[12px] ${mode === id ? 'bg-wash-strong font-medium text-ink' : 'text-ink-muted hover:text-ink'}`}
+          >
             {label}
           </button>
         ))}
@@ -135,16 +166,36 @@ export function TrafficTab(): JSX.Element {
           <span className="ml-1 text-ink-muted">Listen on</span>
           <div className="field flex w-auto items-center gap-0 p-0">
             <span className="py-1 pl-2.5 font-mono text-[12px] text-ink-faint">localhost:</span>
-            <input className="w-16 bg-transparent py-1 pr-2 font-mono text-[12px] outline-none" type="number" value={port} onChange={(e) => setPort(Number(e.target.value) || 4545)} aria-label="Port" />
+            <input
+              className="w-16 bg-transparent py-1 pr-2 font-mono text-[12px] outline-none"
+              type="number"
+              value={port}
+              onChange={(e) => setPort(Number(e.target.value) || 4545)}
+              aria-label="Port"
+            />
           </div>
           <Icon name="send" size={14} className="text-ink-faint" />
         </>
       ) : (
         <>
           <span className="ml-1 text-ink-muted">Open</span>
-          <input className="field w-[300px] py-1 font-mono text-[12px]" value={site} placeholder="https://app.acme.example" onChange={(e) => setSite(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void start()} aria-label="Web app address" />
-{info?.chrome && (
-            <select className="field w-auto py-1 text-[12px]" value={via} disabled={false} onChange={(e) => setVia(e.target.value as BrowserVia)} aria-label="Which browser" title="overapi’s window is simplest. Your Chrome brings extensions — a password manager — on a profile of overapi’s own.">
+          <input
+            className="field w-[300px] py-1 font-mono text-[12px]"
+            value={site}
+            placeholder="https://app.acme.example"
+            onChange={(e) => setSite(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && void start()}
+            aria-label="Web app address"
+          />
+          {info?.chrome && (
+            <select
+              className="field w-auto py-1 text-[12px]"
+              value={via}
+              disabled={false}
+              onChange={(e) => setVia(e.target.value as BrowserVia)}
+              aria-label="Which browser"
+              title="overapi’s window is simplest. Your Chrome brings extensions — a password manager — on a profile of overapi’s own."
+            >
               <option value="overapi">in overapi’s window</option>
               <option value="chrome">in {info.chrome} (with extensions)</option>
             </select>
@@ -161,49 +212,59 @@ export function TrafficTab(): JSX.Element {
       </button>
       <span className="flex-1" />
       <span className="text-[11px] text-ink-faint">
-        {mode === 'browser' ? (via === 'chrome' ? `Opens ${info?.chrome} on overapi’s own profile — add your password manager there once and it stays.` : 'Sign in and use the app as usual. Its own calls are kept; pages, scripts and analytics are not.') : `Point your app, a script or curl at the local address — every call to ${p.title} shows up here.`}
+        {mode === 'browser'
+          ? via === 'chrome'
+            ? `Opens ${info?.chrome} on overapi’s own profile — add your password manager there once and it stays.`
+            : 'Sign in and use the app as usual. Its own calls are kept; pages, scripts and analytics are not.'
+          : `Point your app, a script or curl at the local address — every call to ${p.title} shows up here.`}
       </span>
     </div>
   );
 
   return (
     <div className="flex h-full flex-col">
-      {!mine ? startBar : (
-      <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-bad/5 px-4 py-2 text-[12px]">
-        <span className="relative flex h-2 w-2">
-          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-bad opacity-60" />
-          <span className="relative inline-flex h-2 w-2 rounded-full bg-bad" />
-        </span>
-        <b>Recording</b>
-        {browsing ? (
-          <>
-            <span className="font-mono text-ink-muted">{recorder.via === 'chrome' ? 'chrome' : 'browser'} · {recorder.site?.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span>
-            <span className="text-ink-faint">· keeping calls to {env?.baseUrl.replace(/^https?:\/\//, '')}</span>
-            <span className="flex-1" />
-            <button className="btn" onClick={() => void window.overapi.invoke('recorder:showBrowser')}>
-              Show browser
-            </button>
-          </>
-        ) : (
-          <>
-            <span className="font-mono text-ink-muted">localhost:{recorder.port} → {recorder.target?.replace(/^https?:\/\//, '')}</span>
-            <span className="text-ink-faint">· point the app at :{recorder.port}</span>
-            <span className="flex-1" />
-            <button
-              className="btn"
-              onClick={async () => {
-                await window.overapi.invoke('clipboard:write', `http://localhost:${recorder.port}`);
-                say('Copied.');
-              }}
-            >
-              <Icon name="copy" size={12} /> Copy address
-            </button>
-          </>
-        )}
-        <button className="btn-primary !bg-bad" onClick={() => void window.overapi.invoke('recorder:stop')}>
-          Stop
-        </button>
-      </div>
+      {!mine ? (
+        startBar
+      ) : (
+        <div className="flex flex-wrap items-center gap-3 border-b border-rule bg-bad/5 px-4 py-2 text-[12px]">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-bad opacity-60" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-bad" />
+          </span>
+          <b>Recording</b>
+          {browsing ? (
+            <>
+              <span className="font-mono text-ink-muted">
+                {recorder.via === 'chrome' ? 'chrome' : 'browser'} · {recorder.site?.replace(/^https?:\/\//, '').replace(/\/$/, '')}
+              </span>
+              <span className="text-ink-faint">· keeping calls to {env?.baseUrl.replace(/^https?:\/\//, '')}</span>
+              <span className="flex-1" />
+              <button className="btn" onClick={() => void window.overapi.invoke('recorder:showBrowser')}>
+                Show browser
+              </button>
+            </>
+          ) : (
+            <>
+              <span className="font-mono text-ink-muted">
+                localhost:{recorder.port} → {recorder.target?.replace(/^https?:\/\//, '')}
+              </span>
+              <span className="text-ink-faint">· point the app at :{recorder.port}</span>
+              <span className="flex-1" />
+              <button
+                className="btn"
+                onClick={async () => {
+                  await window.overapi.invoke('clipboard:write', `http://localhost:${recorder.port}`);
+                  say('Copied.');
+                }}
+              >
+                <Icon name="copy" size={12} /> Copy address
+              </button>
+            </>
+          )}
+          <button className="btn-primary !bg-bad" onClick={() => void window.overapi.invoke('recorder:stop')}>
+            Stop
+          </button>
+        </div>
       )}
       {browsing && (
         <div className="border-b border-rule px-4 py-3">
@@ -214,10 +275,8 @@ export function TrafficTab(): JSX.Element {
         <div className="flex shrink-0 flex-col" style={{ width: callsW }}>
           <div className="flex items-center gap-2 border-b border-rule px-3 py-2 text-[11px] text-ink-faint">
             <span className="min-w-0 flex-1">
-            {scoped.length} call{scoped.length === 1 ? '' : 's'} · {scoped.length - unknown.length} already requests here · {unknown.length} new
-            {all.length > scoped.length && (
-              <span title={elsewhereHosts.map((o) => `${o.origin} · ${o.count}`).join('\n')}> · {all.length - scoped.length} to other hosts</span>
-            )}
+              {scoped.length} call{scoped.length === 1 ? '' : 's'} · {scoped.length - unknown.length} already requests here · {unknown.length} new
+              {all.length > scoped.length && <span title={elsewhereHosts.map((o) => `${o.origin} · ${o.count}`).join('\n')}> · {all.length - scoped.length} to other hosts</span>}
             </span>
             <button
               className="btn !px-2 !py-0.5 text-[11px]"
@@ -247,12 +306,28 @@ export function TrafficTab(): JSX.Element {
             {scoped.map((c) => {
               const t = toolOf(c);
               return (
-                <button key={c.id} onClick={() => setSelected(c.id)} className={`flex w-full items-center gap-2 border-b border-rule px-3 py-2 text-left ${c.id === selected ? 'bg-accent/10' : 'hover:bg-wash'}`}>
+                <button
+                  key={c.id}
+                  onClick={() => setSelected(c.id)}
+                  className={`flex w-full items-center gap-2 border-b border-rule px-3 py-2 text-left ${c.id === selected ? 'bg-accent/10' : 'hover:bg-wash'}`}
+                >
                   <Method method={c.method as HttpMethod} />
                   {c.replayOf && <span className="rounded bg-wash-strong px-1 text-[10px] text-ink-faint">replay</span>}
                   <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{c.path}</span>
-                  {t ? <span className="text-[11px] text-good" title={`Request: ${t.name}`}>✓</span> : <span className="rounded bg-accent/20 px-1.5 text-[10px] font-semibold text-accent">new</span>}
-                  <span className={`w-8 text-right font-mono text-[11px] font-semibold ${c.error || c.status >= 400 ? 'text-bad' : 'text-good'}`}>{c.status}</span>
+                  {t ? (
+                    <span className="text-[11px] text-good" title={`Request: ${t.name}`}>
+                      ✓
+                    </span>
+                  ) : (
+                    <span className="rounded bg-accent/20 px-1.5 text-[10px] font-semibold text-accent">new</span>
+                  )}
+                  {c.error?.startsWith('Not sent') ? (
+                    <span className="shrink-0 rounded bg-wash-strong px-1 text-[10px] font-medium text-ink-muted" title={c.error}>
+                      not sent
+                    </span>
+                  ) : (
+                    <span className={`w-8 text-right font-mono text-[11px] font-semibold ${c.error || c.status >= 400 ? 'text-bad' : 'text-good'}`}>{c.status}</span>
+                  )}
                 </button>
               );
             })}
@@ -268,7 +343,15 @@ export function TrafficTab(): JSX.Element {
               calls={scoped}
               base={recorder.target && !browsing ? recorder.target : env?.baseUrl}
               onPick={setSelected}
-              mark={toolOf(call) ? <p className="text-[11px] text-ink-faint">This is <b className="text-ink">{toolOf(call)!.name}</b> in {p.title}.</p> : <p className="text-[11px] text-accent">Not a request in {p.title} yet — add it from Coverage.</p>}
+              mark={
+                toolOf(call) ? (
+                  <p className="text-[11px] text-ink-faint">
+                    This is <b className="text-ink">{toolOf(call)!.name}</b> in {p.title}.
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-accent">Not a request in {p.title} yet — add it from Coverage.</p>
+                )
+              }
             />
           ) : (
             <Empty>Pick a call to see what went out and came back.</Empty>
@@ -315,7 +398,10 @@ export function TrafficTab(): JSX.Element {
               {browsing && scoped.length > 0 && !env?.browserSession && (
                 <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
                   <div className="font-semibold">Sign in the way the browser does</div>
-                  <p className="mt-1 text-ink-faint">Keep this browser’s session (cookies, and any CSRF or token header the app sends) as {env?.name}’s sign-in, so requests and agents work as you. It’s kept in the keychain, expires when the site says so, and is never published.</p>
+                  <p className="mt-1 text-ink-faint">
+                    Keep this browser’s session (cookies, and any CSRF or token header the app sends) as {env?.name}’s sign-in, so requests and agents work as you. It’s kept in the keychain, expires
+                    when the site says so, and is never published.
+                  </p>
                   <button className="btn-primary mt-2.5" onClick={() => void adoptBrowserSignIn()}>
                     Use browser sign-in for {env?.name}
                   </button>
@@ -323,10 +409,14 @@ export function TrafficTab(): JSX.Element {
               )}
               {newRoutes.length > 0 && (
                 <div className="rounded-xl border border-accent/40 bg-accent/5 p-3">
-                  <div className="font-semibold">{newRoutes.length} new route{newRoutes.length === 1 ? '' : 's'}</div>
+                  <div className="font-semibold">
+                    {newRoutes.length} new route{newRoutes.length === 1 ? '' : 's'}
+                  </div>
                   <ul className="mt-1 space-y-0.5 font-mono text-[11px] text-ink-muted">
                     {newRoutes.slice(0, 8).map((r) => (
-                      <li key={r} className="truncate">{r}</li>
+                      <li key={r} className="truncate">
+                        {r}
+                      </li>
                     ))}
                   </ul>
                   <button
@@ -349,31 +439,39 @@ export function TrafficTab(): JSX.Element {
                   </button>
                 </div>
               )}
-              {known.length > 0 && (
+              {stale.length > 0 && (
                 <div className="rounded-xl border border-rule p-3">
-                  <div className="font-semibold">Real values for {known.length} request{known.length === 1 ? '' : 's'}</div>
-                  <p className="mt-1 text-ink-faint">The latest successful call’s arguments become each one’s saved example — ready to send, and what an agent sees as an example.</p>
+                  <div className="font-semibold">
+                    Real values for {stale.length} request{stale.length === 1 ? '' : 's'}
+                  </div>
+                  <p className="mt-1 text-ink-faint">
+                    The latest successful call’s arguments become each one’s saved example — ready to send, and offered to agents as an example of a real value (never secrets or chain variables). Arguments wired to a chain or variable stay as they are.
+                  </p>
                   <button
                     className="btn mt-2.5"
                     onClick={() => {
+                      const n = stale.length;
                       update((x) => ({
                         ...x,
                         tools: x.tools.map((t) => {
-                          const hit = known.find(([id]) => id === t.id);
-                          return hit ? { ...t, example: argsFromCall(t, hit[1], base) } : t;
+                          const hit = stale.find(([id]) => id === t.id);
+                          return hit ? { ...t, example: exampleFrom(t, hit[1]) } : t;
                         }),
                       }));
-                      say(`Updated ${known.length} example${known.length === 1 ? '' : 's'} from real calls.`);
+                      say(`Updated ${n} example${n === 1 ? '' : 's'} from real calls.`);
                     }}
                   >
-                    Update {known.length} example{known.length === 1 ? '' : 's'}
+                    Update {stale.length} example{stale.length === 1 ? '' : 's'}
                   </button>
                 </div>
               )}
+              {known.length > 0 && stale.length === 0 && <p className="flex items-center gap-1.5 text-[12px] text-good">✓ Examples match the latest calls.</p>}
               {known.length > 0 && (
                 <div className="rounded-xl border border-rule p-3">
                   <div className="font-semibold">Save it as a test</div>
-                  <p className="mt-1 text-ink-faint">These {scoped.length} calls, in order, as a scenario to run again — ids passed along from each response, every answer checked for status and shape. Also a load test.</p>
+                  <p className="mt-1 text-ink-faint">
+                    These {scoped.length} calls, in order, as a scenario to run again — ids passed along from each response, every answer checked for status and shape. Also a load test.
+                  </p>
                   <button
                     className="btn mt-2.5"
                     onClick={async () => {
@@ -393,7 +491,8 @@ export function TrafficTab(): JSX.Element {
                 <div className="rounded-xl border border-rule p-3">
                   <div className="font-semibold">Looks like a sign-in</div>
                   <p className="mt-1 text-ink-faint">
-                    {signIn.toolName} → <span className="font-mono">{signIn.auth.path}</span> → {signIn.auth.sendAs === 'bearer' ? 'Authorization' : signIn.auth.name} on {signIn.calls} call{signIn.calls === 1 ? '' : 's'}.
+                    {signIn.toolName} → <span className="font-mono">{signIn.auth.path}</span> → {signIn.auth.sendAs === 'bearer' ? 'Authorization' : signIn.auth.name} on {signIn.calls} call
+                    {signIn.calls === 1 ? '' : 's'}.
                   </p>
                   <button
                     className="btn mt-2.5"
@@ -413,7 +512,9 @@ export function TrafficTab(): JSX.Element {
               )}
               {failing.length > 0 && (
                 <div className="rounded-xl border border-bad/30 p-3">
-                  <div className="font-semibold text-bad">{failing.length} route{failing.length === 1 ? '' : 's'} failing every time</div>
+                  <div className="font-semibold text-bad">
+                    {failing.length} route{failing.length === 1 ? '' : 's'} failing every time
+                  </div>
                   <ul className="mt-1 space-y-1">
                     {failing.map((f) => (
                       <li key={f.key}>
@@ -433,4 +534,3 @@ export function TrafficTab(): JSX.Element {
     </div>
   );
 }
-

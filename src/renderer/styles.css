@@ -38,6 +38,8 @@
   --c-ink-faint: 104 104 114;
   /* The family accent — overcli's indigo, as overgit and overdb use. */
   --c-accent: 93 114 255;
+  /* The chart hue: checked for lightness and contrast on the light surface. */
+  --c-chart: 93 114 255;
   --c-accent-strong: 67 85 224;
   --c-rule: 220 220 226;
   --c-rule-strong: 194 194 203;
@@ -55,12 +57,14 @@
   --c-surface-muted: 36 36 43;
   --c-surface-elevated: 42 42 51;
   --c-ink: 232 232 238;
-  --c-ink-muted: 160 160 168;
-  --c-ink-faint: 112 112 122;
+  --c-ink-muted: 178 178 188;
+  --c-ink-faint: 140 140 152;
   --c-accent: 124 139 255;
+  /* A step darker than the accent: inside the lightness band charts need on dark. */
+  --c-chart: 117 134 250;
   --c-accent-strong: 93 114 255;
   --c-rule: 40 40 46;
-  --c-rule-strong: 56 56 64;
+  --c-rule-strong: 66 66 76;
   --c-wash: rgba(255, 255, 255, 0.025);
   --c-wash-strong: rgba(255, 255, 255, 0.05);
   --c-good: 74 222 128;

@@ -24,9 +24,9 @@ export const isWeak = (t: ToolDef) => !t.description?.trim() || /seen \d+ times?
 /// Roughly what one tool costs in the list an agent gets every turn.
 export const toolTokens = (t: ToolDef) => Math.round(JSON.stringify({ n: t.name, d: t.description, p: t.params.map((x) => [x.name, x.schema, x.description]) }).length / 4);
 
-export function suggestOff(project: Project, env: EnvDef | undefined): Suggestion[] {
+export function suggestOff(project: Project, env: EnvDef | undefined, budget = TOOL_BUDGET): Suggestion[] {
   const on = project.tools.filter((t) => t.enabled);
-  const over = on.length - TOOL_BUDGET;
+  const over = on.length - budget;
   if (over <= 0) return [];
   const links = findLinks(project);
   const used = new Set((project.scenarios ?? []).flatMap((s) => s.steps.map((x) => x.toolId)));

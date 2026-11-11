@@ -139,3 +139,20 @@ describe('MCP server', () => {
     expect(text(r)).toBe('Missing required argument: sku.');
   });
 });
+
+describe('examples for agents', () => {
+  it('offers real, short values and never secrets or chain variables', async () => {
+    const { toMcpTool } = await import('./server');
+    const t = toMcpTool({
+      id: 'GET /x', name: 'get_x', description: 'x', enabled: true, safety: 'read', method: 'GET', path: '/x', bodyMode: 'none',
+      params: ['season', 'team', 'next', 'key', 'blank'].map((name) => ({ name, in: 'query' as const, required: false, schema: { type: 'string' } })),
+      example: { season: 2025, team: 'Acme Rovers', next: '{{teamId}}', key: 'sk_live_abcdefghijklmnopqrstuvwx', blank: '' },
+    });
+    const props = (t.inputSchema as { properties: Record<string, { examples?: unknown[] }> }).properties;
+    expect(props.season.examples).toEqual([2025]);
+    expect(props.team.examples).toEqual(['Acme Rovers']);
+    expect(props.next.examples).toBeUndefined();
+    expect(props.key.examples).toBeUndefined();
+    expect(props.blank.examples).toBeUndefined();
+  });
+});

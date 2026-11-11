@@ -143,7 +143,7 @@ export interface SharedValue {
 
 /// An argument most requests send with the same value — the competition,
 /// the season, the tenant — which belongs to the environment: agents
-/// shouldn't have to know that the Premier League is 8.
+/// shouldn't have to know that the a football league is 8.
 export function sharedValues(project: Project, env: EnvDef | undefined): SharedValue[] {
   const by = new Map<string, { values: Set<string>; tools: string[]; in: ParamDef['in'] }>();
   for (const t of project.tools) {

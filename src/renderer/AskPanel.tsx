@@ -4,6 +4,7 @@ import { Icon } from './icons';
 import { BodyView } from './JsonView';
 import { Markdown } from './Markdown';
 import { addStep, emptyScenario } from '@shared/wire';
+import type { Project } from '@shared/project';
 import type { AskEvent } from '../main/ask';
 
 interface Step {
@@ -25,20 +26,33 @@ interface Turn {
 /// Ask a question in plain words; watch the person's own claude answer it
 /// with this API's tools — read-only — as a conversation: the question, the
 /// tools it used, the answer, formatted.
-export function AskPanel({ env }: { env: string }): JSX.Element {
-  const { project, path, selectTool, setTab, say, update } = useStore();
-  const p = project!;
+/// `target`: ask something other than the open API — a workspace's
+/// combined server. Its own way to open a tool, and no saving as a test
+/// (a test belongs to one API).
+export function AskPanel({ env, target }: { env: string; target?: { path: string; project: Project; onOpenTool?: (name: string) => void } }): JSX.Element {
+  const { project, path: openPath, selectTool, setTab, say, update } = useStore();
+  const p = target?.project ?? project!;
+  const path = target?.path ?? openPath;
   const [question, setQuestion] = useState('');
   const [turns, setTurns] = useState<Turn[]>([]);
   const running = turns.length > 0 && !turns[turns.length - 1].done && !turns[turns.length - 1].error;
   const [now, setNow] = useState(Date.now());
   const end = useRef<HTMLDivElement>(null);
+  const runRef = useRef<string | null>(null);
+  // Leaving the page stops its question: nobody is left to read the answer.
+  useEffect(
+    () => () => {
+      if (runRef.current) void window.overapi.invoke('agent:stop', runRef.current);
+    },
+    [],
+  );
 
   const patchLast = (fn: (t: Turn) => Turn) => setTurns((ts) => (ts.length ? [...ts.slice(0, -1), fn(ts[ts.length - 1])] : ts));
   useEffect(
     () =>
       window.overapi.onEvent((e) => {
-        if (e.type !== 'ask:event') return;
+        // Only this panel's own run — another page may be asking at the same time.
+        if (e.type !== 'ask:event' || e.runId !== runRef.current) return;
         const ev = e.event;
         if (ev.kind === 'tool') patchLast((t) => ({ ...t, steps: [...t.steps, { id: ev.id, name: ev.name, input: ev.input }] }));
         else if (ev.kind === 'result') patchLast((t) => ({ ...t, steps: t.steps.map((x) => (x.id === ev.id ? { ...x, result: { text: ev.text, isError: ev.isError } } : x)) }));
@@ -71,10 +85,13 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
     if (!text || running) return;
     setQuestion('');
     setTurns((ts) => [...ts, { question: text, steps: [], startedAt: Date.now() }]);
-    const r = await window.overapi.invoke('agent:ask', path!, env, text);
+    const runId = crypto.randomUUID();
+    runRef.current = runId;
+    const r = await window.overapi.invoke('agent:ask', path!, env, text, runId);
     if (!r.ok) patchLast((t) => ({ ...t, error: r.error }));
   };
   const openTool = (name: string) => {
+    if (target?.onOpenTool) return target.onOpenTool(name);
     const t = p.tools.find((x) => x.name === name);
     if (!t) return say(`${name} isn’t a request in ${p.title}.`, true);
     selectTool(t.id);
@@ -102,8 +119,8 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-8 px-6 py-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6">
+        <div className="mx-auto flex max-w-4xl flex-col gap-8 py-6">
           {turns.length === 0 && (
             <div className="space-y-4 pt-10 text-center">
               <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-2xl bg-accent/15 text-accent">
@@ -112,8 +129,8 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
               <div>
                 <h2 className="display text-[20px] font-semibold">Ask {p.title} anything</h2>
                 <p className="mx-auto mt-1 max-w-lg text-[13px] leading-relaxed text-ink-muted">
-                  Your claude answers with {p.title}’s tools on <b className="text-ink">{env}</b> — exactly what Claude Code would get, read-only. You see every call it makes; if it
-                  picks the wrong tool or can’t find an id, that’s what to fix.
+                  Your claude answers with {p.title}’s tools on <b className="text-ink">{env}</b> — exactly what Claude Code would get, read-only. You see every call it makes; if it picks the wrong
+                  tool or can’t find an id, that’s what to fix.
                 </p>
               </div>
               {examples.length > 0 && (
@@ -139,25 +156,25 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
                 </div>
 
                 {(turn.steps.length > 0 || live) && (
-                  <details className="group rounded-xl border border-rule bg-surface" open={live || failed > 0}>
-                    <summary className="flex cursor-pointer list-none items-center gap-2 px-3.5 py-2 text-[12px] text-ink-muted">
+                  <details className="group ml-10 overflow-hidden rounded-xl border border-rule bg-surface" open={live || failed > 0}>
+                    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-[12px] text-ink-muted hover:bg-wash">
                       <Icon name="chevron" size={11} className="text-ink-faint transition-transform group-open:rotate-90" />
                       <Icon name="plug" size={13} className="text-accent" />
-                      <span>
+                      <span className="font-medium text-ink">
                         {live && !turn.steps.length ? 'Choosing tools…' : `Used ${turn.steps.length} tool${turn.steps.length === 1 ? '' : 's'}`}
-                        {failed ? <span className="text-bad"> · {failed} failed</span> : null}
+                        {failed ? <span className="font-normal text-bad"> · {failed} failed</span> : null}
                       </span>
                       <span className="flex-1" />
                       {tok > 0 && <span className="text-[11px] tabular-nums text-ink-faint">{tok.toLocaleString()} tok read</span>}
                     </summary>
-                    <ol className="relative ml-[22px] border-l border-rule pb-2 pl-4">
+                    <ol className="divide-y divide-rule border-t border-rule">
                       {turn.steps.map((s) => (
-                        <li key={s.id} className="relative py-1.5">
-                          <span className={`absolute -left-[21px] top-[11px] h-2.5 w-2.5 rounded-full ring-4 ring-surface ${!s.result ? 'animate-pulse bg-accent' : s.result.isError ? 'bg-bad' : 'bg-good'}`} />
-                          <details>
-                            <summary className="flex cursor-pointer list-none items-center gap-2 text-[12.5px]">
+                        <li key={s.id}>
+                          <details className="group/step">
+                            <summary className="flex cursor-pointer list-none items-center gap-2.5 px-4 py-2 text-[12.5px] hover:bg-wash">
+                              <span className={`h-2 w-2 shrink-0 rounded-full ${!s.result ? 'animate-pulse bg-accent' : s.result.isError ? 'bg-bad' : 'bg-good'}`} />
                               <button
-                                className="font-mono font-medium hover:underline"
+                                className="shrink-0 font-mono font-medium text-ink hover:underline"
                                 title="Open this request"
                                 onClick={(e) => {
                                   e.preventDefault();
@@ -167,10 +184,11 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
                                 {s.name}
                               </button>
                               <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-faint">{argsText(s.input)}</span>
-                              {s.result && <span className="text-[10.5px] tabular-nums text-ink-faint">{Math.round(s.result.text.length / 4).toLocaleString()} tok</span>}
+                              {s.result && <span className="shrink-0 text-[11px] tabular-nums text-ink-faint">{Math.round(s.result.text.length / 4).toLocaleString()} tok</span>}
+                              <Icon name="chevron" size={10} className="shrink-0 text-ink-faint transition-transform group-open/step:rotate-90" />
                             </summary>
                             {s.result && (
-                              <div className="mt-1.5 max-h-64 overflow-auto rounded-lg border border-rule bg-wash p-2">
+                              <div className="mx-4 mb-3 max-h-64 overflow-auto rounded-lg border border-rule bg-canvas p-2.5">
                                 <BodyView text={s.result.text} />
                               </div>
                             )}
@@ -182,7 +200,7 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
                 )}
 
                 {live && (
-                  <p className="flex items-center gap-2 pl-1 text-[12px] text-ink-faint">
+                  <p className="ml-10 flex items-center gap-2 text-[12px] text-ink-faint">
                     <span className="flex gap-1">
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.2s]" />
                       <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-accent [animation-delay:-0.1s]" />
@@ -198,7 +216,7 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
                       <Icon name="sparkle" size={14} />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="selectable rounded-2xl rounded-tl-md border border-rule bg-surface px-4 py-3 shadow-sm">
+                      <div className="selectable rounded-2xl rounded-tl-md border border-accent/25 bg-surface-elevated px-5 py-4 shadow-[0_8px_30px_-12px_rgba(0,0,0,0.5)] ring-1 ring-inset ring-white/[0.03]">
                         {turn.done.answer ? <Markdown text={turn.done.answer} /> : <p className="text-ink-faint">(no answer)</p>}
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2 pl-1 text-[11px] text-ink-faint">
@@ -224,7 +242,7 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
                             <Icon name="history" size={11} /> Ask again
                           </span>
                         </button>
-                        {turn.steps.length > 0 && (
+                        {turn.steps.length > 0 && !target && (
                           <button className="rounded-md px-2 py-1 hover:bg-wash hover:text-ink" onClick={() => saveAsTest(turn)} title="The calls it made, in order, as a test you can run again">
                             <span className="inline-flex items-center gap-1">
                               <Icon name="check" size={11} /> Save as a test
@@ -244,13 +262,13 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
       </div>
 
       <form
-        className="border-t border-rule px-6 py-3"
+        className="flex h-[88px] shrink-0 flex-col justify-center border-t border-rule px-6"
         onSubmit={(e) => {
           e.preventDefault();
           void ask(question);
         }}
       >
-        <div className="mx-auto flex max-w-3xl items-center gap-2 rounded-2xl border border-rule-strong bg-surface px-3 py-1.5 focus-within:border-accent/60">
+        <div className="mx-auto flex w-full max-w-4xl items-center gap-2 rounded-2xl border border-rule-strong bg-surface px-3 py-1.5 focus-within:border-accent/60">
           <Icon name="sparkle" size={15} className="shrink-0 text-accent" />
           <input
             className="min-w-0 flex-1 bg-transparent py-1.5 text-[14px] outline-none placeholder:text-ink-faint focus-visible:outline-none"
@@ -262,7 +280,7 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
             autoFocus
           />
           {running ? (
-            <button type="button" className="btn" onClick={() => void window.overapi.invoke('agent:stop')}>
+            <button type="button" className="btn" onClick={() => void window.overapi.invoke('agent:stop', runRef.current ?? undefined)}>
               Stop
             </button>
           ) : (
@@ -271,7 +289,7 @@ export function AskPanel({ env }: { env: string }): JSX.Element {
             </button>
           )}
         </div>
-        <p className="mx-auto mt-1.5 max-w-3xl text-center text-[10.5px] text-ink-faint">Read-only · runs through your claude · uses your Claude usage</p>
+        <p className="mx-auto mt-1.5 w-full max-w-4xl text-center text-[10.5px] text-ink-faint">Read-only · runs through your claude · uses your Claude usage</p>
       </form>
     </div>
   );

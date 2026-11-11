@@ -2,7 +2,7 @@
 // recording covers the site instead of whatever someone happened to click.
 //
 // It aims for coverage, not every page. Pages are grouped the way API
-// paths are — /clubs/1/arsenal and /clubs/2/aston-villa are one kind of
+// paths are — /clubs/1/acme-rovers and /clubs/2/acme-united are one kind of
 // page — and each kind is visited at most twice. On each page it scrolls
 // (lazy loading), opens tabs, picks a couple of options in each dropdown
 // (that's how a season picker's calls appear) and presses "load more"
@@ -33,11 +33,23 @@ export interface ExploreStatus {
   found: number;
   /// Why it stopped.
   reason?: string;
+  /// Requests the read-only guard stopped before they went.
+  blocked?: number;
 }
 
 export const DEFAULT_EXPLORE: ExploreOptions = { maxPages: 40, maxMinutes: 5, delayMs: 1200, perKind: 2 };
 
-/// /clubs/1/arsenal → /clubs/{id}/{name}: the kind of page.
+/// The same site exactly — not one whose address merely starts the same
+/// (acme.example.evil.test, acme.example:8443).
+function sameOrigin(href: string, origin: string): boolean {
+  try {
+    return new URL(href).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+/// /clubs/1/acme-rovers → /clubs/{id}/{name}: the kind of page.
 export function pageKind(url: string): string {
   try {
     const u = new URL(url);
@@ -100,7 +112,7 @@ const PAGE_SCRIPT = String.raw`(async (perControl) => {
   if (more) { await click(more); await sleep(800); }
   document.removeEventListener('submit', noSubmit, true);
   document.removeEventListener('click', noFollow, true);
-  const links = [...document.querySelectorAll('a[href]')].map((a) => ({ href: a.href, text: label(a) })).filter((l) => l.href.startsWith(location.origin) && !UNSAFE.test(l.text));
+  const links = [...document.querySelectorAll('a[href]')].map((a) => ({ href: a.href, text: label(a) })).filter((l) => { try { return new URL(l.href).origin === location.origin; } catch { return false; } }).filter((l) => !UNSAFE.test(l.text));
   return { links, acted };
 })`;
 
@@ -181,7 +193,7 @@ export async function explore(
     const wanted = hooks.wanted();
     const next = found.links
       .map((l) => l.href.split('#')[0])
-      .filter((h) => h.startsWith(origin) && !/\.(pdf|jpe?g|png|gif|svg|zip|mp4|mp3|ics)(\?|$)/i.test(h) && !visited.has(h))
+      .filter((h) => sameOrigin(h, origin) && !/\.(pdf|jpe?g|png|gif|svg|zip|mp4|mp3|ics)(\?|$)/i.test(h) && !visited.has(h))
       .filter((h, i, all) => all.indexOf(h) === i)
       .map((h) => {
         const k = pageKind(h);

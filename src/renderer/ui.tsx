@@ -272,3 +272,48 @@ export function InlineRename({ value, onRename, className = '', title = 'Rename'
     />
   );
 }
+
+/// "Try as an agent" as a tab that asks to be clicked: an accent pill with
+/// a soft glow, and a pulsing dot until it has been tried once.
+export function TryAgentTab({ on, onClick }: { on: boolean; onClick: () => void }): JSX.Element {
+  const [tried, setTried] = useState(() => {
+    try {
+      return localStorage.getItem('overapi:tried-agent') === 'yes';
+    } catch {
+      return true;
+    }
+  });
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onClick();
+        if (!tried) {
+          setTried(true);
+          try {
+            localStorage.setItem('overapi:tried-agent', 'yes');
+          } catch {
+            /* not kept */
+          }
+        }
+      }}
+      aria-current={on ? 'page' : undefined}
+      className={`relative mb-1.5 ml-1 inline-flex h-7 items-center gap-1.5 rounded-full px-3 text-[12.5px] font-semibold transition-all ${
+        on
+          ? 'bg-accent text-white shadow-[0_0_18px_-2px_rgb(var(--c-accent)/0.7)]'
+          : 'border border-accent/50 bg-accent/10 text-accent shadow-[0_0_14px_-3px_rgb(var(--c-accent)/0.55)] hover:bg-accent/20 hover:shadow-[0_0_20px_-2px_rgb(var(--c-accent)/0.7)]'
+      }`}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3ZM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8L19 16Z" />
+      </svg>
+      Try as an agent
+      {!tried && !on && (
+        <span className="absolute -right-0.5 -top-0.5 flex h-2.5 w-2.5">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-70" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
+        </span>
+      )}
+    </button>
+  );
+}

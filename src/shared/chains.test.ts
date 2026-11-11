@@ -20,9 +20,9 @@ function league(): Project {
       t('GET /competitions/{competition_id}/seasons/{season_id}/teams', [['competition_id', 'path'], ['season_id', 'path'], ['_limit', 'query']], {
         name: 'list_season_teams',
         example: { competition_id: 8, season_id: 2025, _limit: 50 },
-        returns: shapeOf({ pagination: { _limit: 50 }, data: [{ id: 't1', name: 'Arsenal' }] }),
+        returns: shapeOf({ pagination: { _limit: 50 }, data: [{ id: 't1', name: 'Acme Rovers' }] }),
       }),
-      t('GET /teams/{team_id}', [['team_id', 'path']], { name: 'get_team', returns: shapeOf({ id: 't1', name: 'Arsenal' }) }),
+      t('GET /teams/{team_id}', [['team_id', 'path']], { name: 'get_team', returns: shapeOf({ id: 't1', name: 'Acme Rovers' }) }),
       t('GET /competitions/{competition_id}/seasons/{season_id}/teams/{team_id}/form', [['competition_id', 'path'], ['season_id', 'path'], ['team_id', 'path']], { name: 'list_team_form', example: { competition_id: 8, season_id: 2025, team_id: 't1' } }),
       t('GET /competitions/{competition_id}/seasons/{season_id}/standings', [['competition_id', 'path'], ['season_id', 'path']], { name: 'list_standings', example: { competition_id: 8, season_id: 2025 } }),
       t('GET /competitions/{competition_id}/seasons/{season_id}/phases/undefined/matches', [['competition_id', 'path'], ['season_id', 'path'], ['kickoff>2026-11-09', 'query']], { name: 'list_undefined_matches' }),

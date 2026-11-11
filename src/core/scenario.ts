@@ -47,7 +47,10 @@ export async function runScenario(project: Project, scenario: Scenario, env: Env
       done({ ...base, skipped: envKind(env.name) === 'production' ? 'changes data — never on production' : step.write ? `changes data — ${env.name} doesn't allow writes` : 'changes data — turn on "Run it" for this step' });
       continue;
     }
-    const missing = unmetVars(scenario, i).filter((v) => failedSaves.has(v) || runtime[v] === undefined);
+    // Values from earlier steps that aren't there: never kept, or an earlier
+    // step failed to keep them. Sending `{{s1_id}}` literally helps nobody.
+    const usedHere = [...JSON.stringify(step.args).matchAll(/\{\{\s*(s\d+_[A-Za-z0-9_]+)\s*\}\}/g)].map((m) => m[1]);
+    const missing = [...new Set([...unmetVars(scenario, i), ...usedHere])].filter((v) => failedSaves.has(v) || runtime[v] === undefined);
     if (missing.length) {
       done({ ...base, skipped: `needs {{${missing[0]}}}, which an earlier step didn't provide` });
       continue;
@@ -222,7 +225,7 @@ export async function runLoad(project: Project, scenario: Scenario, env: EnvDef,
         } catch (e) {
           const msg = (e as Error).message;
           // "Could not reach x: no answer after 21 s." → one kind, whatever the host.
-          record(s.id, Date.now() - t0, false, `${tool!.name}: ${msg}`, msg.replace(/^Could not reach [^:]+: /, '').replace(/\.$/, ''));
+          record(s.id, Date.now() - t0, false, `${tool!.name}: ${msg}`, msg.replace(/^Could not reach \S+: /, '').replace(/\.$/, ''));
         }
       }
     }

@@ -49,7 +49,7 @@ export function createInventoryServer() {
     if (req.method === 'GET') {
       // The WSDL, pointing at wherever this server is actually listening.
       res.writeHead(200, { 'content-type': 'text/xml; charset=utf-8' });
-      return res.end(wsdl.replace('http://localhost:8089/soap/inventory', `http://${req.headers.host}/soap/inventory`));
+      return res.end(wsdl.replaceAll('http://localhost:8089/soap/inventory', `http://${req.headers.host}/soap/inventory`));
     }
     let body = '';
     req.on('data', (c) => (body += c));

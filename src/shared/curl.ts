@@ -52,8 +52,16 @@ export function shellWords(text: string): string[] {
   return words.map((w) => (/\^/.test(w) && !/\s/.test(w) ? w.replace(/\^(.)/g, '$1') : w));
 }
 
+/// Chrome's "Copy as cURL (cmd)" escapes for Windows cmd: every value in
+/// ^"…^", a caret before & | < > ^ and ", and ^ at the end of a line. Undo it,
+/// so the rest reads it like the bash form.
+export function fromCmd(text: string): string {
+  if (!/\^"/.test(text)) return text;
+  return text.replace(/\^\r?\n/g, ' ').replace(/\^(.)/g, '$1');
+}
+
 export function parseCurl(text: string): ParsedCurl {
-  const words = shellWords(text.trim());
+  const words = shellWords(fromCmd(text.trim()));
   if (!/^curl(\.exe)?$/i.test(words[0] ?? '')) throw new Error('That does not start with curl.');
   let method: string | undefined;
   let url: string | undefined;

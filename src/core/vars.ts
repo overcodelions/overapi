@@ -15,10 +15,12 @@ export function parseDotenv(text: string): Record<string, string> {
     const m = line.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)?\s*$/);
     if (!m) continue;
     let v = (m[2] ?? '').trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      const quote = v[0];
-      v = v.slice(1, -1);
-      if (quote === '"') v = v.replace(/\\n/g, '\n').replace(/\\"/g, '"');
+    // A quoted value ends at its closing quote — a `# comment` after it is
+    // not part of it.
+    const quoted = v.match(/^(["'])((?:\\.|(?!\1).)*)\1(?:\s+#.*)?$/);
+    if (quoted) {
+      v = quoted[2];
+      if (quoted[1] === '"') v = v.replace(/\\n/g, '\n').replace(/\\"/g, '"');
     } else {
       v = v.replace(/\s+#.*$/, '');
     }

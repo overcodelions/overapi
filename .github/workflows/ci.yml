@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  # Deliberately unfiltered: a `branches` filter here matches the BASE of
+  # the pull request, so a branch opened against anything but master — a
+  # stacked PR on top of work that has not landed yet — ran no checks at
+  # all, silently. The push trigger above is what keeps this to master for
+  # branch pushes; a PR is worth building wherever it is headed.
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Ported from overcli. Runs on every push and pull request, and fails
+  # without echoing what it matched: a CI log is the one place an account
+  # ID must not be repeated in order to report that it was found.
+  sensitive-data:
+    name: Block AWS account IDs
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Scan tracked files without printing matched IDs
+        run: npm run security:aws-account-ids
+
+      - name: Scan pushed identities and messages without printing private addresses
+        if: github.event_name != 'pull_request'
+        run: npm run security:identities
+
+      - name: Scan PR identities and messages without printing private addresses
+        if: github.event_name == 'pull_request'
+        run: npm run security:identities -- --pull-request
+
+  build-test:
+    name: build + test (${{ matrix.os }} / node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [22]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck + build
+        run: npm run build
+
+      - name: Tests, with coverage
+        run: npm run test:coverage

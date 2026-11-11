@@ -243,7 +243,7 @@ export function AgentTab(): JSX.Element {
       </div>
       {source === 'self' && view === 'ask' ? (
         <div className="min-h-0 flex-1">
-          <AskPanel env={env} />
+          <AskPanel key={`${path}:${env}`} env={env} />
         </div>
       ) : (
       <div className="flex min-h-0 flex-1">

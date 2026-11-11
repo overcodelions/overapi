@@ -15,6 +15,8 @@ export interface ExploreStatusDto {
   current?: string;
   found: number;
   reason?: string;
+  /// Requests the read-only guard stopped before they went.
+  blocked?: number;
 }
 
 /// core/scenario.ts's LoadSnapshot, as the renderer sees it.
@@ -195,6 +197,11 @@ export interface IPCInvokeMap {
   'systems:editMember': (projectPath: string, edit: { env: string; baseUrl?: string; auth?: AuthSpec; copySignIn?: string }) => { ok: boolean; error?: string };
   'systems:install': (path: string, env: string) => { ok: true; name: string } | { ok: false; error: string };
   'systems:installs': (path: string) => Record<string, { at: string; name: string }>;
+  /// Turns a member API's tools on or off, from the workspace.
+  'systems:setEnabled': (projectPath: string, toolIds: string[], enabled: boolean) => { ok: boolean; error?: string };
+  /// Tells agents where an argument comes from — written into that
+  /// parameter's description in its API.
+  'systems:hint': (projectPath: string, toolId: string, param: string, text: string) => { ok: boolean; error?: string };
   /// What another API's sign-in would put on this environment's requests.
   'auth:testVia': (path: string, project: Project, env: string) => { ok: true; from: string; sends: string[] } | { ok: false; error: string };
   'projects:create': (req: { title: string; baseUrl?: string }) => Opened;
@@ -230,8 +237,10 @@ export interface IPCInvokeMap {
   'ai:document': (project: Project, env: string, samples: boolean) => { ok: true; doc: import('../core/document').DocResult; tool: string } | { ok: false; error: string };
   'ai:cancel': () => void;
   /// Ask this API's tools a question through the person's claude (main/ask.ts); steps arrive as 'ask:event'.
-  'agent:ask': (path: string, env: string, question: string) => { ok: true } | { ok: false; error: string };
-  'agent:stop': () => void;
+  /// `runId`: chosen by the panel, so it knows its run's events from the first one.
+  'agent:ask': (path: string, env: string, question: string, runId: string) => { ok: true } | { ok: false; error: string };
+  /// Stops one question's run (or all, with no id).
+  'agent:stop': (runId?: string) => void;
 
   'overgo:publish': (path: string, project: Project, env: string) => { ok: true; id: string } | { ok: false; error: string };
   'overgo:published': (path: string) => Published | null;
@@ -258,7 +267,8 @@ export interface IPCInvokeMap {
   'recorder:browse': (site: string, projectPath?: string, apiBase?: string, via?: BrowserVia) => { ok: true; site: string } | { ok: false; error: string };
   'recorder:showBrowser': () => void;
   /// Explore the site on its own in the recording window (overapi's own window only).
-  'explore:start': () => { ok: true; status: ExploreStatusDto } | { ok: false; error: string };
+  /// `safeSearch`: let read-only searches (POST /search, GraphQL queries) through the guard.
+  'explore:start': (opts?: { safeSearch?: boolean }) => { ok: true; status: ExploreStatusDto } | { ok: false; error: string };
   'explore:stop': () => void;
   /// Reads the site's browser session into the environment's sign-in: the
   /// secrets go to the keychain; the headers come back for the project.
@@ -300,7 +310,7 @@ export interface IPCInvokeMap {
 export type MainEvent =
   | { type: 'discover:step'; text: string }
   | { type: 'doc:step'; text: string }
-  | { type: 'ask:event'; event: import('../main/ask').AskEvent }
+  | { type: 'ask:event'; runId: string; event: import('../main/ask').AskEvent }
   | { type: 'discover:phase'; text: string }
   | { type: 'mcp:toolsChanged' }
   | { type: 'recorder:call'; call: RecordedCall }

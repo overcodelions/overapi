@@ -26,8 +26,8 @@ describe('coverage', () => {
   });
 
   it('groups pages by kind', () => {
-    expect(pageKind('https://x.example/clubs/1/arsenal/overview')).toBe('/clubs/{id}/{name}/overview');
-    expect(pageKind('https://x.example/clubs/2/aston-villa/overview')).toBe('/clubs/{id}/{name}/overview');
+    expect(pageKind('https://x.example/clubs/1/acme-rovers/overview')).toBe('/clubs/{id}/{name}/overview');
+    expect(pageKind('https://x.example/clubs/2/acme-united/overview')).toBe('/clubs/{id}/{name}/overview');
     expect(pageKind('https://x.example/news/a1b2c3d4e5')).toBe('/news/{id}');
     expect(pageKind('https://x.example/tables')).toBe('/tables');
   });

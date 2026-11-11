@@ -1,0 +1,46 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [master]
+  # Deliberately unfiltered: a `branches` filter here matches the BASE of
+  # the pull request, so a branch opened against anything but master — a
+  # stacked PR on top of work that has not landed yet — ran no checks at
+  # all, silently. The push trigger above is what keeps this to master for
+  # branch pushes; a PR is worth building wherever it is headed.
+  pull_request:
+  schedule:
+    # Weekly re-scan so new advisories light up the existing tree.
+    - cron: '17 9 * * 1'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4.35.4
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        # Private repositories without GitHub Code Security cannot upload
+        # results. Keep those repositories usable while making analysis a
+        # required gate automatically as soon as the repository is public.
+        continue-on-error: ${{ github.event.repository.private }}
+        uses: github/codeql-action/analyze@68bde559dea0fdcac2102bfdf6230c5f70eb485e # v4.35.4
+        with:
+          category: "/language:${{ matrix.language }}"

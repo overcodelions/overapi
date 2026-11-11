@@ -149,7 +149,12 @@ export async function findLocalServers(opts: { skipPorts?: number[] } = {}): Pro
   const pids = [...new Set(rows.map((r) => r.pid))].filter(Boolean);
   const cwds = pids.length ? parseLsofCwd(await run('lsof', ['-a', '-d', 'cwd', '-Fpn', '-p', pids.join(',')])) : new Map<number, string>();
   const results = await Promise.all(
-    rows.slice(0, 60).map((r) => probe(r, cwds.get(r.pid), opts.skipPorts ?? [])),
+    // System listeners and databases out first, so a busy Mac's real
+    // servers aren't cut off by the cap.
+    rows
+      .filter((r) => !NOT_HTTP.has(r.port) && !SYSTEM.test(r.process) && !(opts.skipPorts ?? []).includes(r.port))
+      .slice(0, 200)
+      .map((r) => probe(r, cwds.get(r.pid), opts.skipPorts ?? [])),
   );
   const rank = (s: LocalServer) => (s.spec ? 0 : s.kind === 'json' ? 1 : s.kind === 'http' ? 2 : 3);
   return results.filter((s): s is LocalServer => !!s).sort((a, b) => rank(a) - rank(b) || a.port - b.port);

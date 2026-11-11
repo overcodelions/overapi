@@ -141,7 +141,7 @@ export async function chromeCookies(url: string): Promise<{ name: string; value:
     const u = new URL(url);
     return cookies
       .filter((c) => (c.domain.startsWith('.') ? u.hostname === c.domain.slice(1) || u.hostname.endsWith(c.domain) : u.hostname === c.domain))
-      .filter((c) => u.pathname.startsWith(c.path || '/'))
+      .filter((c) => pathMatches(u.pathname, c.path || '/'))
       .map((c) => ({ name: c.name, value: c.value }));
   } finally {
     cdp.close();
@@ -236,4 +236,12 @@ export async function startChromeRecorder(opts: { site: string; onCall: (c: Reco
       done();
     },
   };
+}
+
+/// A cookie's path covers a request path only on a whole segment (RFC 6265
+/// §5.1.4): /api covers /api and /api/orders, not /apix.
+function pathMatches(requestPath: string, cookiePath: string): boolean {
+  if (requestPath === cookiePath) return true;
+  if (!requestPath.startsWith(cookiePath)) return false;
+  return cookiePath.endsWith('/') || requestPath[cookiePath.length] === '/';
 }

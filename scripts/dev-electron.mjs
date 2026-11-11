@@ -28,23 +28,37 @@ async function waitFor() {
 
 let child = null;
 let restarting = false;
+/// A rebuild landed while one restart was already under way: the next
+/// start picks up the newest build anyway, so nothing more to do.
+let again = false;
 
 function start() {
-  child = spawn(electron, ['.'], { stdio: 'inherit', env: { ...process.env, VITE_DEV_SERVER_URL: URL } });
-  child.on('exit', (code) => {
+  const me = spawn(electron, ['.'], { stdio: 'inherit', env: { ...process.env, VITE_DEV_SERVER_URL: URL } });
+  child = me;
+  me.on('exit', (code) => {
+    // Only the current Electron counts; one replaced by a restart doesn't.
+    if (child !== me) return;
     child = null;
-    // Closed by the person (not by a restart): end dev like before.
-    if (!restarting) process.exit(code ?? 0);
+    if (restarting) {
+      restarting = false;
+      again = false;
+      start();
+      return;
+    }
+    // Closed by the person: end dev like before.
+    process.exit(code ?? 0);
   });
 }
 
 function restart() {
   if (!child) return start();
+  // One restart at a time: two Electrons at once and the second quits
+  // (single instance), which used to look like the person closing it.
+  if (restarting) {
+    again = true;
+    return;
+  }
   restarting = true;
-  child.once('exit', () => {
-    restarting = false;
-    start();
-  });
   child.kill('SIGTERM');
 }
 

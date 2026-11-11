@@ -15,6 +15,7 @@ import { buildRequest, send, shown } from '../core/http';
 import { createServer, pickEnv, type SystemSource } from '../core/server';
 import type { Peer } from '../core/flow';
 import { isSystemFile } from '../shared/system';
+import { isPrivateHost, PUBLIC_LOAD_LIMITS } from '../shared/network';
 import { liveProject, readProject, writeProject } from '../core/projectFile';
 import { varSource, type VarSource } from '../core/vars';
 import { checkProject } from '../shared/check';
@@ -46,8 +47,9 @@ Usage:
   overapi scan <overapi.json> [--env <name>] [--fail-on critical|high|medium|low]
       The security scan: leaked secrets, what agents can reach, prompt injection,
       personal data. Exits 1 on a finding at or above --fail-on (default high).
-  overapi load <overapi.json> --scenario <name> [--env <name>] [--users 10] [--duration 30] [--ramp 5]
-      Load-test a scenario's reads. Never sends writes.
+  overapi load <overapi.json> --scenario <name> [--env <name>] [--users 10] [--duration 30] [--ramp 5] [--i-have-permission]
+      Load-test a scenario's reads. Never sends writes. A public host needs --i-have-permission
+      and is held to 5 users for 30 s.
 
 Secrets are read from the environment, or a .env beside overapi.json.`;
 
@@ -118,6 +120,8 @@ async function main(argv: string[]): Promise<void> {
     return;
   }
 
+  // The command first: a typo is a typo, not a missing file.
+  if (!['tools', 'check', 'call', 'serve', 'install', 'test', 'scan', 'load'].includes(cmd)) die(`unknown command ${cmd}. Run overapi --help.`);
   const file = args.shift() ?? die(`${cmd} needs an overapi.json`);
   // A system file: its members, served as one server.
   if (cmd === 'serve' && isSystemFile(readJsonQuiet(file))) {
@@ -254,7 +258,14 @@ async function main(argv: string[]): Promise<void> {
     const users = Number(flag(args, '--users') ?? 10);
     const durationSec = Number(flag(args, '--duration') ?? 30);
     const rampSec = Number(flag(args, '--ramp') ?? 0);
+    // A number that isn't one would skip every limit below and pass silently.
+    for (const [name, v, min] of [['--users', users, 1], ['--duration', durationSec, 1], ['--ramp', rampSec, 0]] as const)
+      if (!Number.isFinite(v) || v < min) die(`${name} needs a number${min ? ' of at least 1' : ''}`);
     if (users > LOAD_LIMITS.users || durationSec > LOAD_LIMITS.durationSec) die(`at most ${LOAD_LIMITS.users} users for ${LOAD_LIMITS.durationSec} s`);
+    if (!isPrivateHost(env.baseUrl)) {
+      if (!args.includes('--i-have-permission')) die(`${env.baseUrl} is a public host. Load testing it is traffic its owners didn't ask for. If you run it or have permission, add --i-have-permission (held to ${PUBLIC_LOAD_LIMITS.users} users for ${PUBLIC_LOAD_LIMITS.durationSec} s).`);
+      if (users > PUBLIC_LOAD_LIMITS.users || durationSec > PUBLIC_LOAD_LIMITS.durationSec) die(`on a public host, at most ${PUBLIC_LOAD_LIMITS.users} users for ${PUBLIC_LOAD_LIMITS.durationSec} s`);
+    }
     process.stdout.write(`Load: ${sc.name} on ${env.name} (${env.baseUrl}) — ${users} users, ${durationSec} s, reads only\n`);
     const out = await runLoad(project, sc, env, {
       vars: varsFor(file), peer: peerFinder(file),
