@@ -28,9 +28,17 @@ export function writeProject(file: string, project: Project): void {
   const problem = projectProblem(project);
   if (problem) throw new Error(`Refusing to save: ${problem}`);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  const fresh = !fs.existsSync(file);
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, `${JSON.stringify(project, null, 2)}\n`);
   fs.renameSync(tmp, file);
+  // Shared through git: the project names its secrets, and .env beside it
+  // holds them on each machine — so a new project's folder keeps .env out.
+  // An existing .gitignore is the person's; it's left alone.
+  if (fresh) {
+    const ignore = path.join(path.dirname(file), '.gitignore');
+    if (!fs.existsSync(ignore)) fs.writeFileSync(ignore, '# Secrets stay on each machine: overapi.json names them, .env holds them.\n.env\n');
+  }
 }
 
 /// A reader that re-parses only when the file changed, and keeps serving

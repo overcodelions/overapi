@@ -150,7 +150,9 @@ const OUTCOME: Record<Outcome, { label: string; tone: string; icon: 'check' | 'x
 const msText = (n?: number) => (n === undefined ? '—' : n >= 1000 ? `${(n / 1000).toFixed(1)} s` : `${n} ms`);
 
 function ScenarioView({ sc, run, onRun, onDelete }: { sc: Scenario; run?: ScenarioRun; onRun: (r: ScenarioRun) => void; onDelete: () => void }): JSX.Element {
-  const { project, path, env: envName, update, say } = useStore();
+  const { project, path, env: envName, update, say, settings } = useStore();
+  // Behind a setting (Settings › General): off, there's no way in.
+  const load = !!settings?.loadTesting;
   const p = project!;
   // Runs where it was recorded (or where the person last ran it), not
   // wherever the top bar happens to point.
@@ -256,15 +258,12 @@ function ScenarioView({ sc, run, onRun, onDelete }: { sc: Scenario; run?: Scenar
       </div>
       <div className="px-3">
         <SubTabs
-          tabs={[
-            { id: 'steps', label: `Steps ${total}` },
-            { id: 'load', label: 'Load test' },
-          ]}
+          tabs={[{ id: 'steps', label: `Steps ${total}` }, ...(load ? [{ id: 'load' as const, label: 'Load test' }] : [])]}
           value={view}
           onChange={setView}
         />
       </div>
-      {view === 'load' ? (
+      {view === 'load' && load ? (
         <LoadView sc={sc} />
       ) : (
         <div className="min-h-0 flex-1 overflow-y-auto pb-6">

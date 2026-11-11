@@ -10,6 +10,7 @@ import type { Project, ToolDef } from '../../shared/project';
 import { emptyProject, varPrefix, type AuthSpec } from '../../shared/project';
 import { uniqueNames, distinctNames } from '../../shared/naming';
 import { importText } from './index';
+import { importGraphql, INTROSPECTION_QUERY, isGraphqlIntrospection } from './graphql';
 
 const SPEC_FILE = /\.(ya?ml|json)(\?|#|$)/i;
 const SPEC_HINT = /openapi|swagger|api-docs|spec/i;
@@ -93,7 +94,7 @@ export async function probeSpecs(url: string, fetchImpl: typeof fetch = fetch): 
   }
   const tries = await Promise.all(
     USUAL_SPEC_PATHS.map((p) =>
-      importFromUrl(origin + p, withTimeout(fetchImpl, 8000)).then(
+      importFromUrl(origin + p, withTimeout(fetchImpl, 8000), { graphql: false }).then(
         (r) => r,
         () => null,
       ),
@@ -141,17 +142,47 @@ export interface UrlImport {
 /// Fetch a URL and import it: a spec, a capture or collection, or a page
 /// linking to specs. Throws with a plain reason when it is none of these —
 /// the caller can then hand the page to discovery instead.
-export async function importFromUrl(url: string, fetchImpl: typeof fetch = fetch): Promise<UrlImport> {
+/// `graphql`: also ask the URL for a GraphQL schema when it isn't a spec.
+/// Off when guessing at many URLs (probeSpecs).
+export async function importFromUrl(url: string, fetchImpl: typeof fetch = fetch, opts: { graphql?: boolean } = {}): Promise<UrlImport> {
   const get = async (u: string) => {
     const res = await fetchImpl(u, { headers: { accept: 'application/json, application/yaml, text/yaml, text/html;q=0.8, */*;q=0.5' } });
     if (!res.ok) throw new Error(`${u} answered ${res.status} ${res.statusText}.`);
     return res.text();
   };
-  const text = await get(url);
+  // A GraphQL endpoint answers its own schema when asked.
+  const graphql = async (): Promise<UrlImport | null> => {
+    if (opts.graphql === false) return null;
+    try {
+      const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ query: INTROSPECTION_QUERY }) });
+      if (!res.ok) return null;
+      const doc = await res.json();
+      return isGraphqlIntrospection(doc) ? { project: importGraphql(doc, url, url) } : null;
+    } catch {
+      return null;
+    }
+  };
+  if (/graphql/i.test(url)) {
+    const g = await graphql();
+    if (g) return g;
+  }
+  let text: string;
+  try {
+    text = await get(url);
+  } catch (e) {
+    // GraphQL endpoints often refuse a plain GET.
+    const g = await graphql();
+    if (g) return g;
+    throw e;
+  }
   try {
     return { project: importText(text, url) };
   } catch (direct) {
-    if (!/^\s*</.test(text)) throw direct;
+    if (!/^\s*</.test(text)) {
+      const g = await graphql();
+      if (g) return g;
+      throw direct;
+    }
   }
   const links = specLinks(text, url);
   if (!links.length) throw new Error('That page is not a spec and links to none. Try From documentation, which reads the page itself.');

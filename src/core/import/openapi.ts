@@ -56,6 +56,8 @@ function toolFrom(method: HttpMethod, path: string, op: Obj, shared: Obj[], swag
   let bodyMode: BodyMode = 'none';
   let bodySchema: Obj | undefined;
   const formFields: Obj[] = [];
+  // multipart/form-data (OpenAPI 3), or a Swagger 2 file parameter.
+  let multipart = false;
 
   for (const p of merged.values()) {
     if (p.in === 'cookie') continue;
@@ -64,6 +66,7 @@ function toolFrom(method: HttpMethod, path: string, op: Obj, shared: Obj[], swag
       continue;
     }
     if (swagger2 && p.in === 'formData') {
+      if (p.type === 'file' || /multipart/i.test(String((op.consumes ?? []).join(' ')))) multipart = true;
       formFields.push(p);
       continue;
     }
@@ -84,8 +87,15 @@ function toolFrom(method: HttpMethod, path: string, op: Obj, shared: Obj[], swag
     const content = (op.requestBody.content ?? {}) as Obj;
     const jsonKey = Object.keys(content).find((k) => /json/i.test(k));
     const formKey = Object.keys(content).find((k) => /x-www-form-urlencoded/i.test(k));
+    const multiKey = Object.keys(content).find((k) => /multipart\/form-data/i.test(k));
     if (jsonKey) bodySchema = content[jsonKey]?.schema ?? {};
-    else if (formKey) {
+    else if (multiKey && !formKey) {
+      multipart = true;
+      const s = content[multiKey]?.schema ?? {};
+      for (const [name, ps] of Object.entries((s.properties ?? {}) as Obj)) {
+        formFields.push({ name, required: (s.required ?? []).includes(name), description: ps.description, schema: ps });
+      }
+    } else if (formKey) {
       const s = content[formKey]?.schema ?? {};
       for (const [name, ps] of Object.entries((s.properties ?? {}) as Obj)) {
         formFields.push({ name, required: (s.required ?? []).includes(name), description: ps.description, schema: ps });
@@ -110,7 +120,7 @@ function toolFrom(method: HttpMethod, path: string, op: Obj, shared: Obj[], swag
       params.push({ name: 'body', in: 'body', required: true, description: 'The JSON request body.', schema: simplify(s) });
     }
   } else if (formFields.length) {
-    bodyMode = 'form';
+    bodyMode = multipart ? 'multipart' : 'form';
     for (const f of formFields) {
       const schema = swagger2 ? swagger2ParamSchema(f) : simplify(f.schema ?? { type: 'string' });
       params.push({ name: f.name, in: 'body', required: !!f.required, description: trimText(f.description ?? '', 300) || undefined, schema });
@@ -185,7 +195,29 @@ function authFrom(doc: Obj, swagger2: boolean, projectName: string): AuthSpec {
   const globalNames = (Array.isArray(doc.security) ? doc.security : []).flatMap((r: Obj) => Object.keys(r ?? {}));
   const ordered = [...globalNames, ...Object.keys(schemes)].map((n) => schemes[n]).filter(Boolean) as Obj[];
   for (const s of ordered) {
-    if ((s.type === 'http' && /bearer/i.test(s.scheme ?? '')) || s.type === 'oauth2' || s.type === 'openIdConnect') {
+    if (s.type === 'oauth2') {
+      // OpenAPI 3 lists flows; Swagger 2 names one. A service account
+      // (client credentials) first, then a person signing in.
+      const flows = (s.flows ?? {}) as Obj;
+      const cc = flows.clientCredentials ?? (s.flow === 'application' ? s : undefined);
+      const code = flows.authorizationCode ?? (s.flow === 'accessCode' ? s : undefined);
+      const flow = cc ?? code;
+      if (flow?.tokenUrl) {
+        const scopes = Object.keys((flow.scopes ?? {}) as Obj);
+        return {
+          type: 'oauth2',
+          grant: cc ? 'client_credentials' : 'authorization_code',
+          tokenUrl: String(flow.tokenUrl),
+          authUrl: !cc && flow.authorizationUrl ? String(flow.authorizationUrl) : undefined,
+          scope: scopes.length && scopes.length <= 10 ? scopes.join(' ') : undefined,
+          clientIdVar: `${prefix}_CLIENT_ID`,
+          clientSecretVar: `${prefix}_CLIENT_SECRET`,
+          refreshTokenVar: `${prefix}_REFRESH_TOKEN`,
+        };
+      }
+      return { type: 'bearer', tokenVar: `${prefix}_TOKEN` };
+    }
+    if ((s.type === 'http' && /bearer/i.test(s.scheme ?? '')) || s.type === 'openIdConnect') {
       return { type: 'bearer', tokenVar: `${prefix}_TOKEN` };
     }
     if (s.type === 'apiKey' && (s.in === 'header' || s.in === 'query')) {

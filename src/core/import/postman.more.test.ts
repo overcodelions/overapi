@@ -111,7 +111,7 @@ describe('importPostman: requests', () => {
     expect(p.tools[0].params.map((x) => x.name)).toEqual(['id', 'body']);
   });
 
-  it('reads urlencoded and form-data fields, skipping files and disabled ones', () => {
+  it('reads urlencoded fields, and form-data as multipart with its files, skipping disabled ones', () => {
     const p = importPostman(
       collection([
         { name: 'Login', request: { method: 'POST', url: '/login', body: { mode: 'urlencoded', urlencoded: [{ key: 'user', value: 'wile' }, { key: 'pin', value: '1234', description: 'Four digits' }, { key: 'old', disabled: true }] } } },
@@ -125,8 +125,12 @@ describe('importPostman: requests', () => {
       ['user', 'string', undefined],
       ['pin', 'integer', 'Four digits'],
     ]);
-    expect(upload.params.map((x) => x.name)).toEqual(['note']);
-    expect([empty.bodyMode, empty.params]).toEqual(['form', []]);
+    expect(upload.bodyMode).toBe('multipart');
+    expect(upload.params.map((x) => [x.name, x.schema.format])).toEqual([
+      ['file', 'binary'],
+      ['note', undefined],
+    ]);
+    expect([empty.bodyMode, empty.params]).toEqual(['multipart', []]);
   });
 
   it('keeps the first of repeated routes and makes clashing names distinct', () => {

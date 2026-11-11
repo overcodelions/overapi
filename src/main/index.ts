@@ -13,6 +13,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile, execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import * as oauth from '../core/oauth';
+import { signInWithBrowser } from '../core/oauthBrowser';
+import { commandToken } from '../core/commandToken';
 import type { IPCInvokeMap, MainEvent, ProjectRef, SecretSource } from '../shared/ipc';
 import type { ServeCommand } from '../shared/install';
 import { emptyProject, slug, varPrefix, type EnvDef, type Project } from '../shared/project';
@@ -169,6 +172,47 @@ function startApp(): void {
       if (patch.ai) void detectTools().then((r) => (aiCache = r));
       if (patch.autoUpdate !== undefined || patch.updateChannel !== undefined) applyUpdatePrefs(s);
       return s;
+    });
+    handle('dialog:pickFile', async (title) => {
+      const r = await dialog.showOpenDialog(win!, { title: title ?? 'Choose a file', properties: ['openFile'] });
+      return r.canceled ? null : (r.filePaths[0] ?? null);
+    });
+    handle('auth:tryCommand', async (p, project, envName) => {
+      const env = project.envs.find((e) => e.name === envName);
+      if (!env || env.auth.type !== 'command') return { ok: false, error: 'That environment doesn’t sign in with a command.' };
+      const rt = runtimeValues(p);
+      try {
+        const token = await commandToken(env.auth, env, { vars: vars(p), runtime: rt }, true);
+        syncRuntime(p, rt, 'token command');
+        return { ok: true, preview: `${token.slice(0, 6)}… (${token.length} characters)` };
+      } catch (e) {
+        return { ok: false, error: (e as Error).message };
+      }
+    });
+    handle('oauth:discover', (issuer) =>
+      oauth.discover(issuer).then(
+        (r) => ({ ok: true as const, ...r }),
+        (e: Error) => ({ ok: false as const, error: e.message }),
+      ),
+    );
+    handle('oauth:signIn', async (p, project, envName) => {
+      const env = project.envs.find((e) => e.name === envName);
+      const a = env?.auth;
+      if (!env || a?.type !== 'oauth2') return { ok: false, error: 'That environment doesn’t sign in with OAuth.' };
+      const rt = runtimeValues(p);
+      try {
+        await signInWithBrowser(a, env, {
+          vars: vars(p),
+          runtime: rt,
+          timeoutMs: st.getSettings().timeoutSec * 1000,
+          saveSecret: (n, val) => void secrets.setSecret(p, n, val),
+          open: (url) => void shell.openExternal(url),
+        });
+      } catch (e) {
+        return { ok: false, error: (e as Error).message };
+      }
+      syncRuntime(p, rt, 'OAuth sign-in');
+      return { ok: true };
     });
     handle('settings:pickDir', async () => {
       const r = await dialog.showOpenDialog(win!, { title: 'Where new APIs are saved', properties: ['openDirectory', 'createDirectory'], defaultPath: st.getSettings().projectsDir });
@@ -554,6 +598,9 @@ function startApp(): void {
             runtime: rt,
             peer,
             timeoutMs: st.getSettings().timeoutSec * 1000,
+            // The person's own Send: a file argument may name a file here.
+            files: true,
+            saveSecret: (n, v) => void secrets.setSecret(req.path, n, v),
           })
           .finally(flush);
         st.addHistory(req.path, { ...entry, ok: r.ok, status: r.status, ms: r.durationMs, url: r.request.url });

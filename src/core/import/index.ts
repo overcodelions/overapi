@@ -7,6 +7,7 @@ import { importOpenApi, isOpenApi } from './openapi';
 import { importHar, isHar } from './har';
 import { importPostman, isPostman } from './postman';
 import { importWsdl, isWsdl } from './wsdl';
+import { importGraphql, isGraphqlIntrospection } from './graphql';
 
 export function parseDocument(text: string): unknown {
   const trimmed = text.trim();
@@ -33,7 +34,8 @@ export function importText(text: string, ref?: string): Project {
   if (isOpenApi(doc)) return importOpenApi(doc as Record<string, unknown>, ref);
   if (isHar(doc)) return importHar(doc as Record<string, any>, ref);
   if (isPostman(doc)) return importPostman(doc as Record<string, any>, ref);
+  if (isGraphqlIntrospection(doc)) return importGraphql(doc, ref);
   const d = doc as Record<string, unknown> | null;
   if (d && typeof d === 'object' && 'overapi' in d) throw new Error('That is already an overapi project. Open it instead of importing it.');
-  throw new Error('Not a format overapi knows. It takes OpenAPI 3, Swagger 2, a WSDL, a HAR capture, or a Postman v2 collection.');
+  throw new Error('Not a format overapi knows. It takes OpenAPI 3, Swagger 2, a WSDL, a HAR capture, a Postman v2 collection, or a GraphQL schema (an introspection result, or the endpoint’s URL).');
 }

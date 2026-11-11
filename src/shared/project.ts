@@ -46,8 +46,11 @@ export interface ParamDef {
 ///   json-fields — body params become the keys of one JSON object.
 ///   json-whole  — a single `body` argument is sent as the JSON body.
 ///   form        — body params are sent url-encoded.
-/// soap — body params become the operation's elements in a SOAP envelope (ToolDef.soap).
-export type BodyMode = 'none' | 'json-fields' | 'json-whole' | 'form' | 'soap';
+///   multipart   — body params are sent as multipart/form-data; a param
+///                 whose schema is `format: binary` is a file.
+///   soap        — body params become the operation's elements in a SOAP envelope (ToolDef.soap).
+///   graphql     — body params are the variables of ToolDef.graphql's query.
+export type BodyMode = 'none' | 'json-fields' | 'json-whole' | 'form' | 'multipart' | 'soap' | 'graphql';
 
 export interface ToolDef {
   /// Stable identity: `METHOD /path`. Survives renames.
@@ -89,6 +92,8 @@ export interface ToolDef {
   before?: BeforeStep[];
   /// A SOAP operation: the envelope, SOAPAction and namespace to send it with.
   soap?: import('./soap').SoapInfo;
+  /// A GraphQL operation: the query sent, its body params as variables.
+  graphql?: { query: string; operationName?: string };
   /// The shape of what it answers, from a recording or the last Send — how
   /// overapi works out which request feeds which (chains.ts).
   returns?: import('./scenario').Shape;
@@ -158,6 +163,41 @@ export type AuthSpec =
   /// session, a token) is borrowed: the same headers go on these requests.
   /// `api` is that API's name; `path` where its file was when picked.
   | { type: 'via'; api: string; path?: string }
+  /// OAuth 2 (src/core/oauth.ts). client_credentials: overapi gets a token
+  /// with the client's id and secret, and again when it runs out.
+  /// authorization_code: a person signs in once in the browser (PKCE); the
+  /// refresh token is saved as the secret `refreshTokenVar`, so the app and
+  /// agents both get fresh tokens from it.
+  | {
+      type: 'oauth2';
+      grant: 'client_credentials' | 'authorization_code';
+      /// The provider's address, where its token and sign-in URLs were
+      /// found (OpenID Connect discovery). The URLs below are what's used.
+      issuer?: string;
+      tokenUrl: string;
+      /// The provider's sign-in page (authorization_code).
+      authUrl?: string;
+      clientIdVar: string;
+      /// Absent for a public client (PKCE alone).
+      clientSecretVar?: string;
+      refreshTokenVar?: string;
+      scope?: string;
+      audience?: string;
+      /// How the client proves itself to the token endpoint. Absent: in the
+      /// body, and with HTTP Basic if the provider refuses that.
+      clientAuth?: 'body' | 'basic';
+      /// The loopback port the browser returns to. Default 47801.
+      redirectPort?: number;
+      /// Extra parameters for the sign-in page — Google's
+      /// access_type=offline, without which it gives no refresh token.
+      authParams?: Record<string, string>;
+    }
+  /// A token printed by a command on this Mac — `gcloud auth
+  /// print-access-token`, `az account get-access-token …`, an SSO CLI.
+  /// The command is kept like a secret (`commandVar`), never in the
+  /// project: a shared project can't run anything you didn't save yourself.
+  /// Run again after `refreshMinutes` (default 15) and on a 401.
+  | { type: 'command'; commandVar: string; sendAs: 'bearer' | 'header'; name?: string; refreshMinutes?: number }
   | {
       type: 'login';
       toolId: string;
@@ -186,9 +226,23 @@ export interface EnvDef {
   /// headers above came from a session on `site`, and expire with it. The
   /// person's own sign-in — never published for others.
   browserSession?: { site: string; at: string; via?: 'overapi' | 'chrome' };
+  /// A client certificate presented on HTTPS requests (mutual TLS), and a
+  /// CA to trust beyond the system's. Files on this machine: write
+  /// `${VAR}` to keep the path out of a shared project.
+  tls?: TlsDef;
 }
 
-export type SourceKind = 'openapi' | 'swagger' | 'wsdl' | 'har' | 'postman' | 'docs' | 'curl' | 'manual';
+export interface TlsDef {
+  certFile?: string;
+  keyFile?: string;
+  /// A .p12/.pfx bundle, in place of cert + key.
+  pfxFile?: string;
+  caFile?: string;
+  /// The secret that unlocks the key or bundle.
+  passphraseVar?: string;
+}
+
+export type SourceKind = 'openapi' | 'swagger' | 'wsdl' | 'har' | 'postman' | 'graphql' | 'docs' | 'curl' | 'manual';
 
 /// `{{name}}` filled from the environment's plain variables. Unknown names
 /// are left as written, so a mistake shows in the URL rather than vanishing.
@@ -247,6 +301,14 @@ export function envVars(env: EnvDef): string[] {
     out.add(a.userVar);
     out.add(a.passVar);
   }
+  if (a.type === 'oauth2') {
+    out.add(a.clientIdVar);
+    if (a.clientSecretVar) out.add(a.clientSecretVar);
+    // Filled by signing in, not typed: listed so it shows as set or not.
+    if (a.grant === 'authorization_code' && a.refreshTokenVar) out.add(a.refreshTokenVar);
+  }
+  if (a.type === 'command') out.add(a.commandVar);
+  if (env.tls?.passphraseVar) out.add(env.tls.passphraseVar);
   for (const v of Object.values(env.headers ?? {})) {
     for (const m of v.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g)) out.add(m[1]);
   }

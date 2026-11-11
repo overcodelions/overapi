@@ -56,8 +56,20 @@ describe('writeProject', () => {
     const text = fs.readFileSync(f, 'utf8');
     expect(text.endsWith('}\n')).toBe(true);
     expect(text).toContain('\n  "name": "acme"');
-    expect(fs.readdirSync(path.dirname(f))).toEqual(['overapi.json']);
+    expect(fs.readdirSync(path.dirname(f)).sort()).toEqual(['.gitignore', 'overapi.json']);
+    expect(fs.readFileSync(path.join(path.dirname(f), '.gitignore'), 'utf8')).toMatch(/^\.env$/m);
     expect(readProject(f)).toEqual(project());
+  });
+
+  it('leaves a .gitignore that is already there alone, and adds none on later saves', () => {
+    const d = tmp();
+    const f = path.join(d, 'overapi.json');
+    fs.writeFileSync(path.join(d, '.gitignore'), 'node_modules\n');
+    writeProject(f, project());
+    expect(fs.readFileSync(path.join(d, '.gitignore'), 'utf8')).toBe('node_modules\n');
+    fs.rmSync(path.join(d, '.gitignore'));
+    writeProject(f, project('Two'));
+    expect(fs.existsSync(path.join(d, '.gitignore'))).toBe(false);
   });
 
   it('refuses to save something that is not a project, and writes nothing', () => {

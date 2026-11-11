@@ -78,6 +78,18 @@ export function toMcpTool(tool: ToolDef): Tool {
     // The value last sent, as a hint of what a real one looks like — never
     // a chain variable, a secret, or anything long.
     const ex = tool.example?.[p.name];
+    // A file: its content, never a path — overapi doesn't read files from
+    // this machine for an agent.
+    if (p.in === 'body' && (p.schema.format === 'binary' || p.schema.type === 'file')) {
+      properties[p.name] = {
+        type: 'object',
+        description: [description, 'A file: its content base64-encoded, and its name.'].filter(Boolean).join(' '),
+        properties: { base64: { type: 'string' }, filename: { type: 'string' }, contentType: { type: 'string' } },
+        required: ['base64'],
+      };
+      if (p.required) required.push(p.name);
+      continue;
+    }
     properties[p.name] = { ...p.schema, ...(description ? { description } : {}), ...(usableExample(ex) ? { examples: [ex] } : {}) };
     if (p.required) required.push(p.name);
   }
