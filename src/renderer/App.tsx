@@ -18,6 +18,7 @@ import { Icon, Monogram, type IconName } from './icons';
 import { checkProject } from '@shared/check';
 import { pasteIntent } from './pasteIntent';
 import { SystemSheet, SystemView } from './SystemView';
+import { UpdatePrompt } from './UpdatePrompt';
 import { QuickSwitch } from './QuickSwitch';
 import type { ProjectRef } from '@shared/ipc';
 
@@ -56,6 +57,7 @@ export function App(): JSX.Element {
       {sheet?.kind === 'settings' && <SettingsSheet />}
       {sheet?.kind === 'system' && <SystemSheet members={sheet.members} />}
       <QuickSwitch />
+      <UpdatePrompt />
       {sheet?.kind === 'delete' && <DeleteApiSheet path={sheet.path} title={sheet.title} />}
       {sheet?.kind === 'curl' && <CurlSheet />}
       {sheet?.kind === 'request' && <NewRequestSheet />}

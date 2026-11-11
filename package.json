@@ -47,6 +47,13 @@
   "build": {
     "appId": "com.overapi.app",
     "productName": "Overapi",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "overcodelions",
+        "repo": "overapi"
+      }
+    ],
     "directories": {
       "output": "release",
       "buildResources": "build"
@@ -69,10 +76,27 @@
     "mac": {
       "category": "public.app-category.developer-tools",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ],
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "hardenedRuntime": true,
+      "notarize": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
     }
   },
   "devDependencies": {
@@ -83,7 +107,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "@vitest/coverage-v8": "4.1.11",
     "autoprefixer": "^10.4.20",
-    "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "^41.7.0",
     "electron-builder": "^26.8.1",
@@ -96,6 +119,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "electron-updater": "^6.8.11",
     "js-yaml": "^4.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
