@@ -71,7 +71,7 @@ export interface TryResponse {
   signedIn?: boolean;
   /// A refusal overapi can't fix itself, and what the person should do.
   hint?: string;
-  request?: { method: string; url: string; headers: Record<string, string>; body?: string };
+  request?: { method: string; url: string; headers: Record<string, string>; body?: string; parts?: { name: string; value?: string; file?: string }[] };
 }
 
 export interface SeenSuggestions {
@@ -112,6 +112,9 @@ export interface Settings {
   autoUpdate: boolean;
   /// stable: tagged releases. beta: prereleases too.
   updateChannel: 'stable' | 'beta';
+  /// Load tests in the Tests tab. Off by default: aimed at the wrong
+  /// environment, a load test is the easiest way to hurt a real API.
+  loadTesting: boolean;
   /// Shown once: the first-run tour.
   toured: boolean;
 }
@@ -190,6 +193,15 @@ export interface IPCInvokeMap {
   'settings:get': () => Settings;
   'settings:set': (patch: Partial<Settings>) => Settings;
   'settings:pickDir': () => string | null;
+  /// A file on this Mac: a multipart upload, a client certificate.
+  'dialog:pickFile': (title?: string) => string | null;
+  /// OAuth authorization code: signs in in the browser (PKCE), keeps the
+  /// access token and saves the refresh token in the keychain.
+  'oauth:signIn': (path: string, project: Project, env: string) => { ok: true } | { ok: false; error: string };
+  /// A provider's token and sign-in URLs, from its address (OpenID Connect discovery).
+  /// Runs an environment's token command once, to see it works.
+  'auth:tryCommand': (path: string, project: Project, env: string) => { ok: true; preview: string } | { ok: false; error: string };
+  'oauth:discover': (issuer: string) => { ok: true; tokenUrl: string; authUrl?: string; scopes?: string[] } | { ok: false; error: string };
 
   'projects:list': () => ProjectRef[];
   'systems:list': () => SystemRef[];

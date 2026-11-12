@@ -11,6 +11,8 @@ import { buildRequest, send, viaKey, type Borrowed, type CallResult } from './ht
 import { providerEnv } from '../shared/system';
 import type { VarSource } from './vars';
 import { sessionExpiredHint } from '../shared/session';
+import { oauthToken } from './oauth';
+import { commandToken, type RunCommand } from './commandToken';
 
 type LoginAuth = Extract<AuthSpec, { type: 'login' }>;
 
@@ -37,6 +39,12 @@ export interface CallDeps {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   now?: () => number;
+  /// Saves a secret — an OAuth refresh token the provider rotated.
+  saveSecret?: (name: string, value: string) => void;
+  /// File arguments may name paths on this machine: the person's Send only.
+  files?: boolean;
+  /// Runs a token command (tests stand in for the shell).
+  run?: RunCommand;
 }
 
 export interface CallOutcome {
@@ -99,6 +107,8 @@ export async function borrowSignIn(via: ViaAuth, envName: string, deps: CallDeps
   if (env.auth.type === 'via') throw new Error(`${peer.project.title} is itself signed in by another API — pick the API that actually signs in.`);
   const pdeps: CallDeps = { ...deps, vars: peer.vars, runtime: peer.runtime, peer: undefined };
   if (env.auth.type === 'login' && (force || needsLogin(env.auth, env, pdeps))) await signIn(peer.project, env, env.auth, pdeps);
+  if (env.auth.type === 'oauth2') await oauthToken(env.auth, env, pdeps, force);
+  if (env.auth.type === 'command') await commandToken(env.auth, env, pdeps, force);
   const probe: ToolDef = { id: '__signin_probe', name: 'probe', description: '', enabled: true, safety: 'read', method: 'GET', path: '/', params: [], bodyMode: 'none' };
   const built = buildRequest(probe, env, {}, peer.vars, peer.runtime);
   const headers: Record<string, string> = {};
@@ -130,7 +140,11 @@ export async function callTool(project: Project, tool: ToolDef, env: EnvDef, arg
   const login = loginFor(tool, env);
   const auth = tool.auth ?? env.auth;
   const via = auth.type === 'via' ? auth : null;
+  const oauth = auth.type === 'oauth2' ? auth : null;
+  const cmd = auth.type === 'command' ? auth : null;
   let signedIn = false;
+  if (oauth) await oauthToken(oauth, env, deps);
+  if (cmd) await commandToken(cmd, env, deps);
   if (login && needsLogin(login, env, deps)) {
     await signIn(project, env, login, deps);
     signedIn = true;
@@ -138,12 +152,22 @@ export async function callTool(project: Project, tool: ToolDef, env: EnvDef, arg
   // Borrowed fresh each call: cheap, and the other API's session (a login
   // it refreshed, a token replaced) is always the current one.
   if (via) deps.runtime[viaKey(env.name)] = JSON.stringify(await borrowSignIn(via, env.name, deps));
-  const go = () => send(buildRequest(tool, env, args, deps.vars, deps.runtime), { limit: deps.limit ?? tool.responseLimit, timeoutMs: deps.timeoutMs, fetchImpl: deps.fetchImpl });
+  const go = () => send(buildRequest(tool, env, args, deps.vars, deps.runtime, { files: deps.files }), { limit: deps.limit ?? tool.responseLimit, timeoutMs: deps.timeoutMs, fetchImpl: deps.fetchImpl });
   const ranFirst = await runBefore(project, tool, env, deps, depth);
   let result = await go();
   // Refused with a token we did not just get: it expired. Sign in, retry once.
   if (login && !signedIn && (result.status === 401 || result.status === 403)) {
     await signIn(project, env, login, deps);
+    signedIn = true;
+    result = await go();
+  } else if (cmd && (result.status === 401 || result.status === 403)) {
+    // The printed token ran out early: run the command again, retry once.
+    await commandToken(cmd, env, deps, true);
+    signedIn = true;
+    result = await go();
+  } else if (oauth && (result.status === 401 || result.status === 403)) {
+    // The token was revoked or ran out early: get a new one, retry once.
+    await oauthToken(oauth, env, deps, true);
     signedIn = true;
     result = await go();
   } else if (via && (result.status === 401 || result.status === 403)) {

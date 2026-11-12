@@ -27,6 +27,8 @@ import {
 import { VALID_NAME } from '@shared/naming';
 import { checkProject, TOOL_BUDGET } from '@shared/check';
 import { formatPath, toCurl, varsUsed } from '@shared/capture';
+import { SNIPPETS } from '@shared/snippets';
+import { isLiteralValue as isLiteral, isSecretName, secretVarName } from '@shared/secretNames';
 import { shapeOf } from '@shared/scenario';
 import { applyLinks, findLinks, isIdLike, readablePath, type Link } from '@shared/chains';
 import { addStep, emptyScenario, feedsFrom, paramsFor, wireInto, type Feed } from '@shared/wire';
@@ -1044,18 +1046,7 @@ function Workbench({ tool }: { tool: ToolDef }): JSX.Element {
                 </span>
               )}
               <span className="flex-1" />
-              {result.request && (
-                <button
-                  className="btn"
-                  title="Copy this request as a curl command (secrets shown as •••)"
-                  onClick={async () => {
-                    await window.overapi.invoke('clipboard:write', toCurl(result.request!));
-                    say('Copied as cURL — secrets are •••.');
-                  }}
-                >
-                  <Icon name="copy" size={12} /> cURL
-                </button>
-              )}
+              {result.request && <CopyAs request={result.request} />}
               <AddToTest tool={tool} body={result.full ?? result.body} />
             </div>
           )}
@@ -1400,7 +1391,11 @@ function AuthEditor({ tool, set }: { tool: ToolDef; set: (fn: (t: ToolDef) => To
             ? `a sign-in request first (${p.tools.find((t) => t.id === a.toolId)?.name ?? 'missing'}) — see Flow`
             : a.type === 'via'
               ? `${a.api}’s sign-in`
-              : `user and password (${a.userVar}, ${a.passVar})`;
+              : a.type === 'oauth2'
+                ? `OAuth 2 (${a.grant === 'client_credentials' ? 'client credentials' : 'signed in in the browser'})`
+                : a.type === 'command'
+                  ? `a token from a command (${a.commandVar})`
+                  : `user and password (${a.userVar}, ${a.passVar})`;
   const kinds: [string, string][] = [
     ['inherit', 'From environment'],
     ['none', 'None'],
@@ -1490,9 +1485,34 @@ function AuthEditor({ tool, set }: { tool: ToolDef; set: (fn: (t: ToolDef) => To
   );
 }
 
-function Step({ n, title, tone, children, right }: { n: string; title: React.ReactNode; tone?: 'accent' | 'muted' | 'dashed'; children?: React.ReactNode; right?: React.ReactNode }): JSX.Element {
-  const box = tone === 'accent' ? 'border-accent/60 bg-accent/5' : tone === 'dashed' ? 'border-dashed border-rule-strong' : tone === 'muted' ? 'border-rule bg-transparent' : 'border-rule bg-wash';
-  const dot = tone === 'accent' ? 'bg-accent text-white' : 'bg-wash-strong text-ink-muted';
+/// `kept` and `next`: green, the colour of a kept value on this screen — what
+/// this request keeps, and the requests that take it.
+function Step({
+  n,
+  title,
+  tone,
+  children,
+  right,
+}: {
+  n: string;
+  title: React.ReactNode;
+  tone?: 'accent' | 'muted' | 'dashed' | 'kept' | 'next';
+  children?: React.ReactNode;
+  right?: React.ReactNode;
+}): JSX.Element {
+  const box =
+    tone === 'accent'
+      ? 'border-accent/60 bg-accent/5'
+      : tone === 'kept'
+        ? 'border-good/30 bg-good/[0.04]'
+        : tone === 'next'
+          ? 'border-dashed border-good/30'
+          : tone === 'dashed'
+            ? 'border-dashed border-rule-strong'
+            : tone === 'muted'
+              ? 'border-rule bg-transparent'
+              : 'border-rule bg-wash';
+  const dot = tone === 'accent' ? 'bg-accent text-white' : tone === 'kept' ? 'bg-good text-white' : tone === 'next' ? 'bg-good/15 text-good' : 'bg-wash-strong text-ink-muted';
   return (
     <section className={`rounded-xl border px-4 py-3 ${box}`}>
       <div className="flex items-center gap-2.5">
@@ -1505,8 +1525,9 @@ function Step({ n, title, tone, children, right }: { n: string; title: React.Rea
   );
 }
 
-function Link({ dashed }: { dashed?: boolean }): JSX.Element {
-  return <div className={`ml-[26px] h-5 border-l-2 ${dashed ? 'border-dashed' : ''} border-rule-strong`} aria-hidden />;
+/// The line between steps; green once a kept value travels along it.
+function Link({ dashed, kept }: { dashed?: boolean; kept?: boolean }): JSX.Element {
+  return <div className={`ml-[26px] h-5 border-l-2 ${dashed ? 'border-dashed' : ''} ${kept ? 'border-good/50' : 'border-rule-strong'}`} aria-hidden />;
 }
 
 /// What happens around a request, top to bottom: sign in first (only when
@@ -1544,6 +1565,14 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
   const used = varsUsed(tool);
   const next = p.tools.filter((t) => t.id !== tool.id && caps.some((c) => varsUsed(t).includes(c.var)));
   const feeds = feedsFrom(p, tool);
+  // "Could feed", one group per kept value: the value once, its targets under it.
+  const feedGroups = [...new Set(feeds.map((f) => f.var))].map((v) => ({ v, list: feeds.filter((f) => f.var === v) }));
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+  const nothingFirst = !isLogin && !login && !suggestion && !(tool.before ?? []).length;
+  const addFirst = () => {
+    const first = p.tools.find((t) => t.id !== tool.id);
+    if (first) set((t) => ({ ...t, before: [...(t.before ?? []), { toolId: first.id, when: 'always' }] }));
+  };
   const wireAll = (list: Feed[]) => {
     update((x) => ({
       ...x,
@@ -1559,148 +1588,145 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
         <span className="font-mono">{tool.name}</span>.
       </p>
 
-      <Step n="1" title="First" tone={login || (tool.before ?? []).length ? undefined : 'muted'}>
-        {isLogin ? (
-          <p className="text-ink-muted">
-            This <b className="text-ink">is</b> the sign-in request for <b className="text-ink">{env?.name}</b>. Agents never see it; overapi runs it before other requests when there’s no token, and
-            again after a 401. Save the credentials in its Params or Body — <span className="font-mono">{'${ACME_PASSWORD}'}</span> for a secret.
-          </p>
-        ) : login ? (
-          <>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">Sign in</span>
-              <span className="text-ink-muted">— run</span>
-              <button className="inline-flex items-center gap-2 rounded-md border border-rule-strong bg-surface-elevated/60 px-2.5 py-1" onClick={() => selectTool(login.id)}>
-                <Method method={login.method} /> {login.name}
-              </button>
-              <span className="text-ink-muted">when there’s no token, again on 401</span>
-              <span className={`rounded-full px-2 py-0.5 font-mono text-[11px] ${status?.signedIn ? 'bg-good/15 text-good' : 'bg-wash-strong text-ink-faint'}`}>
-                {status?.signedIn ? `signed in ${status.at ? new Date(status.at).toLocaleTimeString() : ''}` : 'not signed in yet'}
-              </span>
-            </div>
-            <div className="flex gap-2">
-              <button
-                className="btn"
-                onClick={async () => {
-                  const r = await window.overapi.invoke('auth:signIn', path!, p, env!.name);
-                  if (r.ok) say(`Signed in — token ends ••••${r.tail}.`);
-                  else say(r.error, true);
-                  refresh();
-                }}
-              >
-                Sign in now
-              </button>
-              <button className="btn" onClick={() => setTab('envs')}>
-                Change in Environments
-              </button>
-            </div>
-          </>
-        ) : suggestion ? (
-          <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2">
-            <span className="flex-1 text-ink-muted">
-              <b className="text-ink">{suggestion.name}</b> looks like a sign-in. Use it to sign in automatically before requests that need it?
-            </span>
-            <button
-              className="btn"
-              onClick={() => {
-                update((x) => ({
-                  ...x,
-                  envs: x.envs.map((e) =>
-                    e.name === env!.name
-                      ? {
-                          ...e,
-                          auth: {
-                            type: 'login',
-                            toolId: suggestion.id,
-                            from: 'body',
-                            path: 'token',
-                            sendAs: 'bearer',
-                          },
-                        }
-                      : e,
-                  ),
-                }));
-                setTab('envs');
-                say(`${suggestion.name} is now the sign-in for ${env!.name}. Check where the token is in its response.`);
-              }}
-            >
-              Use as sign-in
-            </button>
-          </div>
-        ) : null}
-
-        {(tool.before ?? []).map((b, i) => {
-          const setB = (patchB: Partial<BeforeStep>) =>
-            set((t) => ({
-              ...t,
-              before: (t.before ?? []).map((x, j) => (j === i ? { ...x, ...patchB } : x)),
-            }));
-          return (
-            <div key={i} className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">Run</span>
-              <select className="field w-56 py-1 text-[12px]" value={b.toolId} onChange={(e) => setB({ toolId: e.target.value })}>
-                {p.tools
-                  .filter((t) => t.id !== tool.id)
-                  .map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.method} {t.name}
-                    </option>
-                  ))}
-              </select>
-              <select className="field w-44 py-1 text-[12px]" value={b.when} onChange={(e) => setB({ when: e.target.value as BeforeStep['when'] })}>
-                <option value="always">every time</option>
-                <option value="missing">only if a value is missing</option>
-              </select>
-              {b.when === 'missing' && (
-                <>
-                  <span className="font-mono text-ink-faint">{'{{'}</span>
-                  <input
-                    className="field w-32 py-1 font-mono text-[12px]"
-                    value={b.var ?? ''}
-                    placeholder="order_id"
-                    onChange={(e) =>
-                      setB({
-                        var: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '_') || undefined,
-                      })
-                    }
-                  />
-                  <span className="font-mono text-ink-faint">{'}}'}</span>
-                </>
-              )}
-              <button
-                className="text-[14px] text-ink-faint hover:text-bad"
-                title="Don’t run it first"
-                onClick={() =>
-                  set((t) => ({
-                    ...t,
-                    before: (t.before ?? []).filter((_, j) => j !== i),
-                  }))
-                }
-              >
-                ×
-              </button>
-            </div>
-          );
-        })}
-        {!isLogin && (
-          <button
-            className="text-accent hover:underline"
-            onClick={() => {
-              const first = p.tools.find((t) => t.id !== tool.id);
-              if (first)
-                set((t) => ({
-                  ...t,
-                  before: [...(t.before ?? []), { toolId: first.id, when: 'always' }],
-                }));
-            }}
-          >
+      {nothingFirst ? (
+        <div className="flex items-center gap-2.5 px-4 py-1 text-[12px]">
+          <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-wash-strong text-[11px] font-bold text-ink-faint">1</span>
+          <span className="text-ink-faint">Nothing runs first.</span>
+          <button className="text-accent hover:underline" onClick={addFirst} title="Run another request before this one — with the values saved on it">
             + Run another request first
           </button>
-        )}
-        {!isLogin && !login && !suggestion && !(tool.before ?? []).length && (
-          <p className="text-[11px] text-ink-faint">Nothing runs first. Add a request to run before this one — with the values saved on it — or set up a sign-in in Environments.</p>
-        )}
-      </Step>
+        </div>
+      ) : (
+        <Step n="1" title="First" tone={login || (tool.before ?? []).length ? undefined : 'muted'}>
+          {isLogin ? (
+            <p className="text-ink-muted">
+              This <b className="text-ink">is</b> the sign-in request for <b className="text-ink">{env?.name}</b>. Agents never see it; overapi runs it before other requests when there’s no token, and
+              again after a 401. Save the credentials in its Params or Body — <span className="font-mono">{'${ACME_PASSWORD}'}</span> for a secret.
+            </p>
+          ) : login ? (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">Sign in</span>
+                <span className="text-ink-muted">— run</span>
+                <button className="inline-flex items-center gap-2 rounded-md border border-rule-strong bg-surface-elevated/60 px-2.5 py-1" onClick={() => selectTool(login.id)}>
+                  <Method method={login.method} /> {login.name}
+                </button>
+                <span className="text-ink-muted">when there’s no token, again on 401</span>
+                <span className={`rounded-full px-2 py-0.5 font-mono text-[11px] ${status?.signedIn ? 'bg-good/15 text-good' : 'bg-wash-strong text-ink-faint'}`}>
+                  {status?.signedIn ? `signed in ${status.at ? new Date(status.at).toLocaleTimeString() : ''}` : 'not signed in yet'}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  className="btn"
+                  onClick={async () => {
+                    const r = await window.overapi.invoke('auth:signIn', path!, p, env!.name);
+                    if (r.ok) say(`Signed in — token ends ••••${r.tail}.`);
+                    else say(r.error, true);
+                    refresh();
+                  }}
+                >
+                  Sign in now
+                </button>
+                <button className="btn" onClick={() => setTab('envs')}>
+                  Change in Environments
+                </button>
+              </div>
+            </>
+          ) : suggestion ? (
+            <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/5 px-3 py-2">
+              <span className="flex-1 text-ink-muted">
+                <b className="text-ink">{suggestion.name}</b> looks like a sign-in. Use it to sign in automatically before requests that need it?
+              </span>
+              <button
+                className="btn"
+                onClick={() => {
+                  update((x) => ({
+                    ...x,
+                    envs: x.envs.map((e) =>
+                      e.name === env!.name
+                        ? {
+                            ...e,
+                            auth: {
+                              type: 'login',
+                              toolId: suggestion.id,
+                              from: 'body',
+                              path: 'token',
+                              sendAs: 'bearer',
+                            },
+                          }
+                        : e,
+                    ),
+                  }));
+                  setTab('envs');
+                  say(`${suggestion.name} is now the sign-in for ${env!.name}. Check where the token is in its response.`);
+                }}
+              >
+                Use as sign-in
+              </button>
+            </div>
+          ) : null}
+
+          {(tool.before ?? []).map((b, i) => {
+            const setB = (patchB: Partial<BeforeStep>) =>
+              set((t) => ({
+                ...t,
+                before: (t.before ?? []).map((x, j) => (j === i ? { ...x, ...patchB } : x)),
+              }));
+            return (
+              <div key={i} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">Run</span>
+                <select className="field w-56 py-1 text-[12px]" value={b.toolId} onChange={(e) => setB({ toolId: e.target.value })}>
+                  {p.tools
+                    .filter((t) => t.id !== tool.id)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.method} {t.name}
+                      </option>
+                    ))}
+                </select>
+                <select className="field w-44 py-1 text-[12px]" value={b.when} onChange={(e) => setB({ when: e.target.value as BeforeStep['when'] })}>
+                  <option value="always">every time</option>
+                  <option value="missing">only if a value is missing</option>
+                </select>
+                {b.when === 'missing' && (
+                  <>
+                    <span className="font-mono text-ink-faint">{'{{'}</span>
+                    <input
+                      className="field w-32 py-1 font-mono text-[12px]"
+                      value={b.var ?? ''}
+                      placeholder="order_id"
+                      onChange={(e) =>
+                        setB({
+                          var: e.target.value.replace(/[^A-Za-z0-9_.-]/g, '_') || undefined,
+                        })
+                      }
+                    />
+                    <span className="font-mono text-ink-faint">{'}}'}</span>
+                  </>
+                )}
+                <button
+                  className="text-[14px] text-ink-faint hover:text-bad"
+                  title="Don’t run it first"
+                  onClick={() =>
+                    set((t) => ({
+                      ...t,
+                      before: (t.before ?? []).filter((_, j) => j !== i),
+                    }))
+                  }
+                >
+                  ×
+                </button>
+              </div>
+            );
+          })}
+          {!isLogin && (
+            <button className="text-accent hover:underline" onClick={addFirst}>
+              + Run another request first
+            </button>
+          )}
+        </Step>
+      )}
       <Link />
 
       <Step
@@ -1741,9 +1767,9 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
           {!login && used.length === 0 && tool.params.length === 0 && <span className="text-ink-faint">nothing else</span>}
         </div>
       </Step>
-      <Link />
+      <Link kept={caps.length > 0} />
 
-      <Step n="3" title="Then keep, for later requests">
+      <Step n="3" title="Then keep, for later requests" tone={caps.length ? 'kept' : undefined}>
         {caps.length === 0 && (
           <p className="text-ink-faint">
             Nothing yet. Send it, then hover a value in the response and click <span className="rounded border border-accent/40 px-1 text-[10px] text-accent">{'{{ }}'}</span>.
@@ -1838,9 +1864,9 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
           + Keep a value by path
         </button>
       </Step>
-      <Link dashed />
+      <Link dashed kept={caps.length > 0 && (next.length > 0 || feeds.length > 0)} />
 
-      <Step n="→" title="Used next by" tone="dashed">
+      <Step n="→" title="Used next by" tone={caps.length ? 'next' : 'dashed'}>
         {next.length > 0 && (
           <div className="flex flex-wrap gap-2">
             {next.map((t) => (
@@ -1886,25 +1912,57 @@ function FlowEditor({ tool, set, producers }: { tool: ToolDef; set: (fn: (t: Too
                 Use all {feeds.length}
               </button>
             </div>
-            {feeds.slice(0, 12).map((f) => {
-              const t = p.tools.find((x) => x.id === f.toolId)!;
+            {feedGroups.map(({ v, list }) => {
+              const open = openGroups.has(v);
+              const shown = open ? list : list.slice(0, 4);
               return (
-                <div key={`${f.var}-${f.toolId}-${f.param}`} className="flex items-center gap-2 border-t border-rule px-3 py-1.5 first:border-t-0">
-                  <span className="w-32 truncate font-mono text-[11px] text-accent">{`{{${f.var}}}`}</span>
-                  <span className="text-ink-faint">→</span>
-                  <Method method={t.method} />
-                  <button className="min-w-0 truncate hover:underline" onClick={() => selectTool(t.id)}>
-                    {f.toolName}
-                  </button>
-                  <span className="font-mono text-[11px] text-ink-faint">{f.param}</span>
-                  <span className="flex-1" />
-                  <button className="btn !px-2 !py-0.5 text-[11px]" onClick={() => wireAll([f])}>
-                    Use
-                  </button>
+                <div key={v} className="border-t border-rule first:border-t-0">
+                  <div className="flex items-center gap-2 px-3 pb-1 pt-2">
+                    <span className="font-mono text-[11.5px] text-good">{`{{${v}}}`}</span>
+                    <span className="text-[11px] text-ink-faint">
+                      could fill {list.length} request{list.length === 1 ? '' : 's'}
+                    </span>
+                    <span className="flex-1" />
+                    {feedGroups.length > 1 && (
+                      <button className="text-[11px] text-accent hover:underline" onClick={() => wireAll(list)}>
+                        Use all {list.length}
+                      </button>
+                    )}
+                  </div>
+                  {shown.map((f) => {
+                    const t = p.tools.find((x) => x.id === f.toolId)!;
+                    return (
+                      <div key={`${f.toolId}-${f.param}`} className="flex items-center gap-2 py-1 pl-6 pr-3 hover:bg-wash">
+                        <Method method={t.method} />
+                        <button className="min-w-0 truncate hover:underline" onClick={() => selectTool(t.id)}>
+                          {f.toolName}
+                        </button>
+                        <span className="font-mono text-[11px] text-ink-faint">{f.param}</span>
+                        <span className="flex-1" />
+                        <button className="btn !px-2 !py-0.5 text-[11px]" onClick={() => wireAll([f])}>
+                          Use
+                        </button>
+                      </div>
+                    );
+                  })}
+                  {list.length > 4 && (
+                    <button
+                      className="mb-1.5 ml-6 text-[11px] text-ink-faint hover:text-ink"
+                      onClick={() =>
+                        setOpenGroups((g) => {
+                          const n = new Set(g);
+                          if (open) n.delete(v);
+                          else n.add(v);
+                          return n;
+                        })
+                      }
+                    >
+                      {open ? 'Show fewer' : `Show ${list.length - 4} more`}
+                    </button>
+                  )}
                 </div>
               );
             })}
-            {feeds.length > 12 && <div className="border-t border-rule px-3 py-1.5 text-[11px] text-ink-faint">and {feeds.length - 12} more — Use all wires them too.</div>}
           </div>
         )}
       </Step>
@@ -2036,8 +2094,9 @@ const TONE: Record<string, { card: string; label: string; dot: string; chip: str
 const PAGING = /^(page|page_?number|page_?size|per_?page|size|limit|offset|cursor|sort|sort_?by|order|order_?by|direction|start|count)$/i;
 
 /// What a parameter holds, in a word — it picks the control.
-function kindOf(prm: ParamDef): 'choice' | 'yes/no' | 'list' | 'number' | 'object' | 'id' | 'text' {
+function kindOf(prm: ParamDef): 'choice' | 'yes/no' | 'list' | 'number' | 'object' | 'id' | 'text' | 'file' {
   const t = Array.isArray(prm.schema.type) ? prm.schema.type[0] : prm.schema.type;
+  if (prm.schema.format === 'binary' || t === 'file') return 'file';
   if (prm.schema.enum?.length) return 'choice';
   if (t === 'boolean') return 'yes/no';
   if (t === 'array') {
@@ -2352,6 +2411,109 @@ function ParamTable({
   );
 }
 
+/// A secret typed into a request: sent from there, it's saved in the project
+/// file for anyone with it to read. One click moves it to the keychain and
+/// leaves `${NAME}` in its place.
+function KeepSecret({ name, value, onValue }: { name: string; value: string; onValue: (v: string) => void }): JSX.Element {
+  const { project, path, say, refreshSecrets } = useStore();
+  const varName = secretVarName(varPrefix(project!.name), name);
+  const keep = async () => {
+    const r = await window.overapi.invoke('secrets:set', path!, varName, value);
+    if (!r.ok) return say(r.error ?? 'Not saved.', true);
+    onValue(`\${${varName}}`);
+    await refreshSecrets();
+    say(`Kept in the keychain as ${varName}. The request sends it; the project only names it.`);
+  };
+  return (
+    <div className="flex items-center gap-2 px-1 text-[11.5px]">
+      <span className="min-w-0 flex-1 text-warn">Plain text: once sent, it’s saved in overapi.json for anyone with the project to read.</span>
+      <button type="button" className="shrink-0 font-medium text-accent hover:underline" onClick={() => void keep()}>
+        Keep it in the keychain
+      </button>
+    </div>
+  );
+}
+
+/// The request as sent, as code to run elsewhere: cURL in one click, or
+/// fetch, Python or HTTPie. Secrets stay •••.
+function CopyAs({ request }: { request: NonNullable<TryResponse['request']> }): JSX.Element {
+  const { say } = useStore();
+  const [open, setOpen] = useState(false);
+  const copy = async (id: (typeof SNIPPETS)[number]['id']) => {
+    const s = SNIPPETS.find((x) => x.id === id)!;
+    await window.overapi.invoke('clipboard:write', id === 'curl' && !request.parts ? toCurl(request) : s.make(request));
+    say(`Copied as ${s.label} — secrets are •••.`);
+    setOpen(false);
+  };
+  return (
+    <div
+      className="relative"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOpen(false);
+      }}
+    >
+      <div className="inline-flex">
+        <button className="btn rounded-r-none" title="Copy this request as a curl command (secrets shown as •••)" onClick={() => void copy('curl')}>
+          <Icon name="copy" size={12} /> cURL
+        </button>
+        <button className="btn rounded-l-none border-l-0 px-1.5" aria-label="Copy as other code" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+      </div>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-48 overflow-hidden rounded-lg border border-rule-strong bg-surface-elevated py-1 shadow-xl">
+          <div className="px-3 pb-1 pt-0.5 text-[10.5px] text-ink-faint">Copy as</div>
+          {SNIPPETS.map((s) => (
+            <button key={s.id} type="button" className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-wash" onClick={() => void copy(s.id)}>
+              {s.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// A file to upload: picked here, sent as `@/path` (read when sent). Agents
+/// send the content instead — see core/http.ts.
+function FilePick({ value, onValue, autoFocus }: { value: string; onValue: (v: string) => void; autoFocus?: boolean }): JSX.Element {
+  const file = value.startsWith('@') ? value.slice(1) : '';
+  const pick = async () => {
+    const f = await window.overapi.invoke('dialog:pickFile', 'File to upload');
+    if (f) onValue(`@${f}`);
+  };
+  return (
+    <div className="flex items-center gap-1.5">
+      <button type="button" autoFocus={autoFocus} className="btn h-[30px] shrink-0" onClick={() => void pick()}>
+        {file ? 'Change…' : 'Choose file…'}
+      </button>
+      {file ? (
+        <span className="min-w-0 truncate font-mono text-[12px] text-ink" title={file}>
+          {file.split('/').pop()}
+          <span className="ml-1.5 text-ink-faint">
+            {file
+              .split('/')
+              .slice(0, -1)
+              .join('/')
+              .replace(/^\/Users\/[^/]+/, '~')}
+          </span>
+        </span>
+      ) : value ? (
+        <span className="min-w-0 truncate text-[12px] text-ink-muted">content given ({value.length} characters)</span>
+      ) : (
+        <span className="text-[12px] text-ink-faint">no file</span>
+      )}
+      {value && (
+        <button type="button" className="ml-auto shrink-0 text-[11px] text-ink-faint hover:text-ink" onClick={() => onValue('')}>
+          Clear
+        </button>
+      )}
+    </div>
+  );
+}
+
 /// any · true · false, or a few named choices — one click each.
 function Segmented({ options, value, onValue }: { options: { v: string; label: string }[]; value: string; onValue: (v: string) => void }): JSX.Element {
   return (
@@ -2624,6 +2786,7 @@ function ParamRow({
   const kind = kindOf(prm);
   const optional = prm.in !== 'path' && !prm.required;
   const linked = !!source && !!toolId && (kind === 'id' || kind === 'text');
+  const secretLike = isSecretName(prm.name) && (kind === 'id' || kind === 'text');
   const about = prm.description ?? prm.schema.description;
   const [open, setOpen] = useState(false);
   const control = (() => {
@@ -2648,10 +2811,19 @@ function ParamRow({
       return <Segmented options={[...(optional ? [{ v: '', label: 'any' }] : []), { v: 'true', label: 'true' }, { v: 'false', label: 'false' }]} value={value} onValue={onValue} />;
     if (kind === 'list') return <Chips value={value} onValue={onValue} autoFocus={autoFocus} toolId={toolId} param={prm.name} />;
     if (kind === 'number') return <Stepper value={value} onValue={onValue} autoFocus={autoFocus} />;
+    if (kind === 'file') return <FilePick value={value} onValue={onValue} autoFocus={autoFocus} />;
     if (kind === 'object')
       return <textarea autoFocus={autoFocus} className="field min-h-[54px] py-1 font-mono text-[11.5px]" value={value} onChange={(e) => onValue(e.target.value)} placeholder="JSON" />;
     return toolId ? (
-      <SeenInput toolId={toolId} param={prm.name} value={value} onValue={onValue} placeholder={prm.required || prm.in === 'path' ? 'value or {{variable}}' : 'value'} autoFocus={autoFocus} />
+      <SeenInput
+        toolId={toolId}
+        param={prm.name}
+        value={value}
+        onValue={onValue}
+        placeholder={secretLike ? 'value or ${SECRET}' : prm.required || prm.in === 'path' ? 'value or {{variable}}' : 'value'}
+        autoFocus={autoFocus}
+        secret={secretLike}
+      />
     ) : (
       <input autoFocus={autoFocus} className="field py-1 font-mono text-[12px]" value={value} onChange={(e) => onValue(e.target.value)} placeholder="value or {{variable}}" />
     );
@@ -2692,6 +2864,7 @@ function ParamRow({
         ) : (
           <>
             {control}
+            {secretLike && isLiteral(value) && <KeepSecret name={prm.name} value={value} onValue={onValue} />}
             <KeptValue value={value} />
           </>
         )}
@@ -2707,18 +2880,19 @@ function ParamRow({
             <div className="flex flex-wrap items-center gap-x-2 px-1.5 text-[10.5px] text-ink-faint">
               <select
                 className="bg-transparent outline-none hover:text-ink"
-                value={t ?? ''}
+                value={kind === 'file' ? 'file' : (t ?? '')}
                 onChange={(e) =>
                   onChange({
-                    schema: {
-                      ...prm.schema,
-                      type: e.target.value || undefined,
-                    },
+                    // A file is a binary string, as OpenAPI writes it.
+                    schema:
+                      e.target.value === 'file'
+                        ? { ...prm.schema, type: 'string', format: 'binary' }
+                        : { ...prm.schema, type: e.target.value || undefined, format: prm.schema.format === 'binary' ? undefined : prm.schema.format },
                   })
                 }
                 aria-label="Type"
               >
-                {['string', 'integer', 'number', 'boolean', 'array', 'object'].map((x) => (
+                {['string', 'integer', 'number', 'boolean', 'array', 'object', ...(prm.in === 'body' ? ['file'] : [])].map((x) => (
                   <option key={x} value={x}>
                     {x}
                   </option>
@@ -2781,6 +2955,8 @@ function BodyEditor({ tool, values, setValues, set }: { tool: ToolDef; values: V
     { id: 'json-fields', label: 'JSON fields' },
     { id: 'json-whole', label: 'Raw JSON' },
     { id: 'form', label: 'Form' },
+    { id: 'multipart', label: 'Multipart' },
+    { id: 'graphql', label: 'GraphQL' },
   ];
   const changeMode = (m: BodyMode) =>
     set((t) => {
@@ -2797,7 +2973,9 @@ function BodyEditor({ tool, values, setValues, set }: { tool: ToolDef; values: V
             schema: {},
           },
         ];
-      if ((m === 'json-fields' || m === 'form') && t.bodyMode === 'json-whole') params = params.filter((p) => p.in !== 'body');
+      if ((m === 'json-fields' || m === 'form' || m === 'multipart' || m === 'graphql') && t.bodyMode === 'json-whole') params = params.filter((p) => p.in !== 'body');
+      // GraphQL goes as a POST with a query; its body fields are the variables.
+      if (m === 'graphql') return { ...t, bodyMode: m, params, method: 'POST', graphql: t.graphql ?? { query: 'query {\n  \n}' } };
       return { ...t, bodyMode: m, params };
     });
   if (tool.bodyMode === 'soap' && tool.soap) {
@@ -2842,12 +3020,37 @@ function BodyEditor({ tool, values, setValues, set }: { tool: ToolDef; values: V
         <p className="text-[12px] text-ink-faint">This request sends no body.</p>
       ) : (
         <>
+          {tool.bodyMode === 'graphql' && (
+            <div className="mb-3 space-y-1.5">
+              <label className="label" htmlFor="gql-query">
+                Query
+              </label>
+              <textarea
+                id="gql-query"
+                spellCheck={false}
+                className="field min-h-[160px] py-2 font-mono text-[12px] leading-relaxed"
+                value={tool.graphql?.query ?? ''}
+                onChange={(e) => set((t) => ({ ...t, graphql: { ...t.graphql, query: e.target.value } }))}
+              />
+              <input
+                className="field w-64 font-mono text-[12px]"
+                placeholder="operation name (optional)"
+                value={tool.graphql?.operationName ?? ''}
+                onChange={(e) => set((t) => ({ ...t, graphql: { query: t.graphql?.query ?? '', operationName: e.target.value || undefined } }))}
+                aria-label="Operation name"
+              />
+            </div>
+          )}
           <p className="mb-2 text-[11px] text-ink-faint">
             {tool.bodyMode === 'json-fields'
               ? 'Each field is its own argument for the agent; they are sent together as one JSON object.'
               : tool.bodyMode === 'form'
                 ? 'Each field is its own argument; sent form-encoded.'
-                : 'The agent passes the whole JSON body as one argument.'}
+                : tool.bodyMode === 'multipart'
+                  ? 'Each field is its own argument; sent as multipart/form-data. A field of type file uploads a file — agents send its content, never a path.'
+                  : tool.bodyMode === 'graphql'
+                    ? 'Each field below is a variable of the query ($name), and an argument for the agent.'
+                    : 'The agent passes the whole JSON body as one argument.'}
           </p>
           <ParamTable tool={tool} kinds={['body']} values={values} setValues={setValues} set={set} />
         </>

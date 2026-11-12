@@ -7,6 +7,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-10
+
 ### Added
 - **Ways in:** OpenAPI 3, Swagger 2, HAR, Postman v2 and WSDL import; from a
   cURL; from documentation (PDFs, pages, a docs URL) with your claude or codex;
@@ -20,18 +22,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   JSON in and out for agents, Faults as errors. A sample service to try.
 - **Workbench:** params as a query — what's sent on top, the rest as chips,
   a control per kind of value, a live URL and paste-to-fill; values seen in
-  earlier responses offered by name; copy as cURL and other formats; replay;
+  earlier responses offered by name; copy as cURL, fetch, Python or HTTPie;
+  replay;
   history; a readable response view with full JSON when truncated.
 - **Chains:** which request gives the ids another needs, kept between calls;
   run-first steps; login requests that refresh themselves.
-- **Environments and sign-in:** bearer, API key, basic, WS-Security, a login
-  request, a browser session, or another API's sign-in; *Sign in again*
-  redoes whichever it is and resends.
+- **Environments and sign-in:** bearer, API key, basic, WS-Security, OAuth 2
+  (client credentials, or authorization code with PKCE and refresh tokens
+  kept in the keychain, for agents too; set up from the provider's address,
+  with presets for Google, Microsoft, Okta and Auth0), a token printed by a
+  command (gcloud, az, an SSO CLI), a login request, a browser session,
+  or another API's sign-in; *Sign in again* redoes whichever it is and
+  resends. Client certificates (mutual TLS) per environment.
+- **Bodies:** JSON, form, multipart with file uploads (agents send content,
+  never paths), GraphQL with variables, and SOAP.
+- **GraphQL:** import from an endpoint or an introspection file; every query
+  a read tool and every mutation a write, with its query written out.
+- **Sharing through git:** a project is a folder with `overapi.json` and a
+  `.gitignore` that keeps `.env` out.
 - **Workspaces:** APIs that belong together, with one sign-in, a grid of
   where each runs in every environment, and one MCP server for all of them.
-- **Tests and load:** scenarios from recordings checking status and shape,
-  run in the app or `overapi test` (JUnit for CI); load tests of reads with a
-  live chart and failures explained.
+- **Tests:** scenarios from recordings checking status and shape, run in the
+  app or `overapi test` (JUnit for CI). Load tests of reads with a live chart
+  and failures explained, behind a setting that's off by default.
 - **Agent-ready:** one reviewed pass — tidy, fixed values, chains, then AI
   descriptions, argument help, names, what to hide, an agent brief and
   example questions. A tool budget with suggestions, and a security scan that

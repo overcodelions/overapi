@@ -33,14 +33,15 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 | | |
 |---|---|
 | **1 · Bring it in** | A spec, a cURL, a HAR, a Postman collection, a WSDL, the docs, the service's own source code — or record the web app that uses it. |
-| **2 · Use it** | A fast workbench: environments, sign-in, the params that matter, responses you can read, tests and load. |
+| **2 · Use it** | A fast workbench: environments, sign-in, the params that matter, responses you can read, and tests. |
 | **3 · Make it agent-ready** | One pass that tidies, connects and documents it — rules first, then your own claude or codex — with every change shown before it's applied. |
 | **4 · Publish** | Into Claude Code in one click, to any MCP client as a snippet, or to your team through overgo. |
 
 ## Ways in
 
 - **A server on this Mac.** New API lists what's listening locally — `:4010 node · orders-api — spec · 24` — and imports a served spec in one click. When the spec is behind a login, paste a token and it fetches it anyway; when there is no spec at all, **Read its code** has claude read the service's routes, request and response classes and sign-in (read-only) and draft every endpoint.
-- **Import.** OpenAPI 3, Swagger 2, a HAR capture, a Postman v2 collection, or a WSDL.
+- **Import.** OpenAPI 3, Swagger 2, a HAR capture, a Postman v2 collection (folders, OAuth 2, form-data files and GraphQL bodies included), or a WSDL.
+- **GraphQL.** Point it at the endpoint (or an introspection file): every query becomes a read tool and every mutation a write, each with its query written out and its arguments typed — so an agent never has to write GraphQL itself.
 - **From a cURL.** "Copy as cURL" from the browser: ids in the path become arguments, the values become the example, any token goes to the keychain.
 - **From documentation.** PDFs, Markdown or HTML, a docs URL, or pasted text. claude finds the real spec files if the site links to them, and drafts one if it doesn't.
 - **Record a web app.** Sign in and use the app in overapi's browser — or your own Chrome, password manager and all — and its API calls become requests. Or let **Explore for me** click around on its own, skipping anything that looks like delete, pay or sign out.
@@ -52,8 +53,11 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 - **Values it has already seen.** Click an id and pick from the ones earlier responses held, by name — "Acme Supply Co", not `076f0e8a…`. Nothing seen yet? Run the request that lists them, from the same dropdown.
 - **Chains.** overapi works out which request gives the ids another needs (`list_accounts → content[0].id → get_account.accountId`), keeps them for the next call, and runs a login first when the API needs one.
 - **Environments.** Local, staging and production, colour-coded, each with its base URL, sign-in, variables and headers. New environments start read-only; allowing writes on production means typing its name.
-- **Sign-in, however it works.** A token, an API key, user and password, WS-Security, a login request (refreshed when refused), the session from a browser sign-in — or **another API's**. When a sign-in runs out, *Sign in again* redoes it the right way and resends.
-- **Tests and load.** Turn a recording into a test that checks status and response shape, run it in CI (`overapi test --junit`), and load-test its reads with a live chart and every failure explained.
+- **Sign-in, however it works.** A token, an API key, user and password, WS-Security, **OAuth 2** — client credentials, or a person signing in once in the browser (PKCE) with tokens refreshed from then on, for agents too, with one-click setup for Google, Microsoft, Okta and Auth0 — a **token from a command** (`gcloud auth print-access-token`, `az account get-access-token`, your SSO tool's), a login request (refreshed when refused), the session from a browser sign-in, or **another API's**. When a sign-in runs out, *Sign in again* redoes it the right way and resends.
+- **Client certificates.** Mutual TLS per environment: a cert and key, or a .p12 bundle, and a private CA if you need one.
+- **Bodies.** JSON, form, multipart with file uploads, GraphQL with variables, and SOAP. Agents send a file's content, never a path on your Mac.
+- **Copy as code.** cURL, fetch, Python or HTTPie, secrets shown as •••.
+- **Tests.** Turn a recording into a test that checks status and response shape, and run it in CI (`overapi test --junit`). Load-testing a scenario's reads is there too, off by default (Settings › General) — pointed at the wrong environment it's the easiest way to hurt a real API.
 
 ## Agent-ready
 
@@ -70,7 +74,7 @@ Services that belong together — the APIs of one product — grouped, with **on
 
 - **This Mac.** *Add to Claude Code* installs it (per environment); snippets for Codex and any MCP client carry placeholders, never secrets.
 - **Your team.** Hand it to overgo through overcli: only the chosen environment, the tools that are on, and the *names* of its secrets. An admin finishes it in overgo's console.
-- **A file.** `overapi.json` — readable, diffable, and what `overapi serve` runs.
+- **Git.** A project is a folder: `overapi.json` — readable, diffable, and what `overapi serve` runs — beside a `.gitignore` that keeps `.env` out. Commit it with the API's code; teammates open the folder and add their own secrets. That's the shared collection: no account, no cloud workspace.
 
 ## Safety
 

@@ -8,13 +8,14 @@ import { argsFromCall, basePathOf, requestGraph, suggestSignIn, toolForCall } fr
 import { endpointStats, routeOf } from '@shared/metrics';
 import { siteGuess } from '@shared/session';
 import { originsOf, within, type BrowserVia, type RecordedCall, type RecordMode } from '@shared/recording';
-import type { HttpMethod } from '@shared/project';
+import { varPrefix, type HttpMethod } from '@shared/project';
+import { keepSecretsOut } from '@shared/secretNames';
 
 /// An API's own traffic: record it from the API's environment, watch the
 /// calls, and turn them into changes to THIS API — new routes, real
 /// examples, a sign-in — instead of building a second one.
 export function TrafficTab(): JSX.Element {
-  const { project, path, env: envName, recorder, say, update, reload, openRecorder, info, setTab } = useStore();
+  const { project, path, env: envName, recorder, say, update, reload, openRecorder, info, setTab, refreshSecrets } = useStore();
   const p = project!;
   const env = p.envs.find((e) => e.name === envName) ?? p.envs[0];
   const mine = recorder.running && recorder.projectPath === path;
@@ -74,12 +75,25 @@ export function TrafficTab(): JSX.Element {
   const newRoutes = [...new Set(unknown.map((c) => `${c.method} ${routeOf(c.path)}`))];
   const known = [...new Map(scoped.filter((c) => !c.error && c.status < 400).map((c) => [toolOf(c)?.id, c] as const)).entries()].filter(([id]) => id);
   /// The latest call's arguments as a request's example — keeping any
-  /// argument wired to a chain or variable ({{…}}), which a fixed value
-  /// would undo.
-  const exampleFrom = (t: (typeof p.tools)[number], c: RecordedCall) => {
+  /// argument wired to a chain, a variable or a secret ({{…}}, ${…}), which
+  /// a fixed value would undo — and secrets (a password) out of it: they go
+  /// to the keychain, the example keeps ${NAME}.
+  const examplePlan = (t: (typeof p.tools)[number], c: RecordedCall) => {
     const fresh = argsFromCall(t, c, base);
-    for (const [k, v] of Object.entries(t.example ?? {})) if (typeof v === 'string' && /^\{\{.+\}\}$/.test(v)) fresh[k] = v;
-    return fresh;
+    for (const [k, v] of Object.entries(t.example ?? {})) if (typeof v === 'string' && /^(\{\{.+\}\}|\$\{[A-Za-z_][A-Za-z0-9_]*\})$/.test(v)) fresh[k] = v;
+    return keepSecretsOut(t, fresh, varPrefix(p.name));
+  };
+  const exampleFrom = (t: (typeof p.tools)[number], c: RecordedCall) => examplePlan(t, c).args;
+  /// Saves what a call's secrets were in the keychain, then sets the examples.
+  const applyCalls = async (hits: [string, RecordedCall][]) => {
+    const plans = hits.map(([id, c]) => {
+      const t = p.tools.find((x) => x.id === id)!;
+      return [id, examplePlan(t, c)] as const;
+    });
+    for (const [, plan] of plans) for (const [name, value] of plan.secrets) await window.overapi.invoke('secrets:set', path!, name, value);
+    update((x) => ({ ...x, tools: x.tools.map((t) => ({ ...t, example: plans.find(([id]) => id === t.id)?.[1].args ?? t.example })) }));
+    if (plans.some(([, plan]) => plan.secrets.length)) await refreshSecrets();
+    return plans.flatMap(([, plan]) => plan.secrets.map(([n]) => n));
   };
   // Only the ones whose saved example differs from what was just seen.
   const stale = known.filter(([id, c]) => {
@@ -345,9 +359,17 @@ export function TrafficTab(): JSX.Element {
               onPick={setSelected}
               mark={
                 toolOf(call) ? (
-                  <p className="text-[11px] text-ink-faint">
-                    This is <b className="text-ink">{toolOf(call)!.name}</b> in {p.title}.
-                  </p>
+                  <CallMatch
+                    name={toolOf(call)!.name}
+                    project={p.title}
+                    usable={!call.error && call.status < 400}
+                    same={JSON.stringify(exampleFrom(toolOf(call)!, call)) === JSON.stringify(toolOf(call)!.example ?? {})}
+                    secrets={examplePlan(toolOf(call)!, call).secrets.length}
+                    onUse={async () => {
+                      const kept = await applyCalls([[toolOf(call)!.id, call]]);
+                      say(`${toolOf(call)!.name} sends these values now.${kept.length ? ` ${kept.join(', ')} kept in the keychain, not the project.` : ''}`);
+                    }}
+                  />
                 ) : (
                   <p className="text-[11px] text-accent">Not a request in {p.title} yet — add it from Coverage.</p>
                 )
@@ -449,16 +471,10 @@ export function TrafficTab(): JSX.Element {
                   </p>
                   <button
                     className="btn mt-2.5"
-                    onClick={() => {
+                    onClick={async () => {
                       const n = stale.length;
-                      update((x) => ({
-                        ...x,
-                        tools: x.tools.map((t) => {
-                          const hit = stale.find(([id]) => id === t.id);
-                          return hit ? { ...t, example: exampleFrom(t, hit[1]) } : t;
-                        }),
-                      }));
-                      say(`Updated ${n} example${n === 1 ? '' : 's'} from real calls.`);
+                      const kept = await applyCalls(stale as [string, RecordedCall][]);
+                      say(`Updated ${n} example${n === 1 ? '' : 's'} from real calls.${kept.length ? ` ${kept.join(', ')} kept in the keychain.` : ''}`);
                     }}
                   >
                     Update {stale.length} example{stale.length === 1 ? '' : 's'}
@@ -531,6 +547,36 @@ export function TrafficTab(): JSX.Element {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/// Which request a call is, and — when its values differ from that
+/// request's saved ones — a way to make them its defaults.
+function CallMatch({ name, project, usable, same, secrets, onUse }: { name: string; project: string; usable: boolean; same: boolean; secrets: number; onUse: () => Promise<void> }): JSX.Element {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-faint">
+      <span>
+        This is <b className="text-ink">{name}</b> in {project}.
+      </span>
+      {usable && same && <span className="text-good">Its saved values match this call.</span>}
+      {usable && !same && (
+        <button
+          type="button"
+          className="font-medium text-accent hover:underline disabled:opacity-50"
+          disabled={busy}
+          title={secrets ? 'Passwords and keys go to the keychain; the request keeps ${NAME}.' : undefined}
+          onClick={async () => {
+            setBusy(true);
+            await onUse();
+            setBusy(false);
+          }}
+        >
+          Use these values for {name}
+          {secrets ? ' (secrets to the keychain)' : ''}
+        </button>
+      )}
     </div>
   );
 }

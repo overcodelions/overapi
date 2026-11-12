@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   timeoutSec: 30,
   autoUpdate: true,
   updateChannel: 'stable',
+  loadTesting: false,
   toured: false,
 };
 

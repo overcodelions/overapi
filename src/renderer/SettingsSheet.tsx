@@ -86,6 +86,9 @@ export function SettingsSheet(): JSX.Element {
                     </button>
                   </div>
                 </Row>
+                <Row title="Load testing" note="Load-test a scenario's reads from the Tests tab. Off by default: aimed at the wrong environment, a load test is the easiest way to hurt a real API.">
+                  <Segmented value={settings.loadTesting ? 'on' : 'off'} onChange={(v) => set({ loadTesting: v === 'on' })} options={[['off', 'Off'], ['on', 'On']]} />
+                </Row>
                 <Row title="Request timeout" note="How long a request sent from the app waits for an answer.">
                   <div className="flex items-center gap-2">
                     <input className="field w-20 text-right" type="number" min={1} max={300} value={settings.timeoutSec} onChange={(e) => set({ timeoutSec: Number(e.target.value) })} />

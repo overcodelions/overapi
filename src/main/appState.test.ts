@@ -40,6 +40,8 @@ describe('settings', () => {
   it('starts from the defaults', () => {
     expect(s.getSettings()).toEqual(s.DEFAULT_SETTINGS);
     expect(s.DEFAULT_SETTINGS.projectsDir).toBe(path.join(os.homedir(), 'overapi'));
+    // Load testing can hurt a real API: it starts hidden.
+    expect(s.DEFAULT_SETTINGS.loadTesting).toBe(false);
   });
 
   it('merges a patch and keeps it', () => {

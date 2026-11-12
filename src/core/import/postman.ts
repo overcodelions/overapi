@@ -73,12 +73,29 @@ export function importPostman(doc: Obj, ref?: string): Project {
         bodyMode = 'json-whole';
         params.push({ name: 'body', in: 'body', required: true, description: 'The JSON request body.', schema });
       }
-    } else if (body?.mode === 'urlencoded' || body?.mode === 'formdata') {
+    } else if (body?.mode === 'urlencoded') {
       bodyMode = 'form';
-      for (const f of (body[body.mode] ?? []) as Obj[]) {
-        if (!f?.key || f.disabled || f.type === 'file') continue;
+      for (const f of (body.urlencoded ?? []) as Obj[]) {
+        if (!f?.key || f.disabled) continue;
         params.push({ name: f.key, in: 'body', required: false, description: text(f.description) || undefined, schema: inferScalar(f.value ? [String(f.value)] : []) });
       }
+    } else if (body?.mode === 'formdata') {
+      // Multipart: a file field stays a file.
+      bodyMode = 'multipart';
+      for (const f of (body.formdata ?? []) as Obj[]) {
+        if (!f?.key || f.disabled) continue;
+        const file = f.type === 'file';
+        params.push({ name: f.key, in: 'body', required: false, description: text(f.description) || undefined, schema: file ? { type: 'string', format: 'binary' } : inferScalar(f.value ? [String(f.value)] : []) });
+      }
+    } else if (body?.mode === 'graphql' && body.graphql?.query) {
+      bodyMode = 'graphql';
+      let variables: Record<string, unknown> = {};
+      try {
+        variables = JSON.parse(String(body.graphql.variables || '{}').replace(/\{\{[^}]+\}\}/g, 'null')) as Record<string, unknown>;
+      } catch {
+        variables = {};
+      }
+      for (const [k, v] of Object.entries(variables)) params.push({ name: k, in: 'body', required: false, schema: v === null ? {} : infer([v]) });
     }
     const described = text(req.description);
     return {
@@ -91,6 +108,7 @@ export function importPostman(doc: Obj, ref?: string): Project {
       path,
       params,
       bodyMode,
+      ...(bodyMode === 'graphql' ? { graphql: { query: String(body!.graphql.query) } } : {}),
       origin: { summary: name, tags: folder.length ? folder : undefined },
     };
   });
@@ -131,7 +149,31 @@ function splitUrl(url: unknown, vars: Record<string, string>): { base: string; p
 function authFrom(a: Obj | undefined, projectName: string): AuthSpec {
   const prefix = varPrefix(projectName);
   if (!a?.type) return { type: 'none' };
-  if (a.type === 'bearer' || a.type === 'oauth2') return { type: 'bearer', tokenVar: `${prefix}_TOKEN` };
+  if (a.type === 'oauth2') {
+    // Postman keeps its OAuth settings as a key/value list.
+    const get = (k: string) => {
+      const v = ((a.oauth2 ?? []) as Obj[]).find((x) => x.key === k)?.value;
+      return typeof v === 'string' && v && !/^\{\{.*\}\}$/.test(v) ? v : undefined;
+    };
+    const grant = get('grant_type');
+    const tokenUrl = get('accessTokenUrl');
+    if (tokenUrl && (grant === 'client_credentials' || grant === 'authorization_code' || grant === 'authorization_code_with_pkce')) {
+      return {
+        type: 'oauth2',
+        grant: grant === 'client_credentials' ? 'client_credentials' : 'authorization_code',
+        tokenUrl,
+        authUrl: get('authUrl'),
+        scope: get('scope'),
+        audience: get('audience'),
+        clientIdVar: `${prefix}_CLIENT_ID`,
+        clientSecretVar: `${prefix}_CLIENT_SECRET`,
+        refreshTokenVar: `${prefix}_REFRESH_TOKEN`,
+        clientAuth: get('client_authentication') === 'header' ? 'basic' : 'body',
+      };
+    }
+    return { type: 'bearer', tokenVar: `${prefix}_TOKEN` };
+  }
+  if (a.type === 'bearer') return { type: 'bearer', tokenVar: `${prefix}_TOKEN` };
   if (a.type === 'basic') return { type: 'basic', userVar: `${prefix}_USER`, passVar: `${prefix}_PASSWORD` };
   if (a.type === 'apikey') {
     const get = (k: string) => ((a.apikey ?? []) as Obj[]).find((x) => x.key === k)?.value;

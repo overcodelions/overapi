@@ -1,5 +1,5 @@
 import { RenewButton } from './Renew';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore } from './store';
 import { Empty, EnvChip, EnvDot, Toggle } from './ui';
 import { Icon } from './icons';
@@ -135,7 +135,7 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
   const a = env.auth;
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="max-w-4xl space-y-6 p-6">
       <div className="flex items-center gap-3">
         <EnvChip name={env.name} writes={env.allowWrites} />
         <span className="flex-1" />
@@ -164,11 +164,14 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
         <div className="flex flex-wrap gap-1.5">
           {(
             [
-              ['none', 'None'],
+              // Signed in through the browser and nothing else: that's the sign-in, not "None".
+              ['none', env.browserSession ? 'Browser session' : 'None'],
               ['bearer', 'Bearer token'],
               ['apiKey', 'API key'],
               ['basic', 'User + password'],
               ['wsse', 'WS-Security'],
+              ['oauth2', 'OAuth 2'],
+              ['command', 'Token from a command'],
               ['login', 'Log in with a request'],
               ['via', 'Another API'],
             ] as const
@@ -182,6 +185,16 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
                 if (t === 'apiKey') setAuth({ type: 'apiKey', in: 'header', name: 'X-API-Key', valueVar: `${prefix}_API_KEY` });
                 if (t === 'basic') setAuth({ type: 'basic', userVar: `${prefix}_USER`, passVar: `${prefix}_PASSWORD` });
                 if (t === 'wsse') setAuth({ type: 'wsse', userVar: `${prefix}_USER`, passVar: `${prefix}_PASSWORD` });
+                if (t === 'command') setAuth({ type: 'command', commandVar: `${prefix}_TOKEN_COMMAND`, sendAs: 'bearer' });
+                if (t === 'oauth2')
+                  setAuth({
+                    type: 'oauth2',
+                    grant: 'client_credentials',
+                    tokenUrl: '',
+                    clientIdVar: `${prefix}_CLIENT_ID`,
+                    clientSecretVar: `${prefix}_CLIENT_SECRET`,
+                    refreshTokenVar: `${prefix}_REFRESH_TOKEN`,
+                  });
                 if (t === 'via') {
                   const { projects, systems } = useStore.getState();
                   const mine = systems.find((x) => x.members.includes(path!));
@@ -216,8 +229,9 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
             </>
           )}
           {a.type === 'login' && <LoginFields env={env} a={a} setAuth={setAuth} />}
+          {a.type === 'oauth2' && <OAuthFields env={env} a={a} setAuth={setAuth} />}
+          {a.type === 'command' && <CommandFields env={env} a={a} setAuth={setAuth} />}
           {a.type === 'via' && <ViaFields env={env} a={a} setAuth={setAuth} />}
-          {(a.type === 'none' || env.browserSession) && <BrowserSession env={env} set={set} />}
           {a.type === 'wsse' && (
             <>
               <p className="text-[11px] text-ink-faint">A WS-Security UsernameToken, sent in the SOAP envelope’s header of every SOAP request.</p>
@@ -231,7 +245,16 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
               <SecretField label="Password" varName={a.passVar} onVar={(v) => setAuth({ ...a, passVar: v })} source={secrets[a.passVar]} path={path!} />
             </>
           )}
+          {(a.type === 'none' || env.browserSession) && <BrowserSession env={env} set={set} alongside={a.type !== 'none'} />}
         </div>
+      </section>
+
+      <section>
+        <h3 className="mb-1 text-[13px] font-semibold">Client certificate</h3>
+        <p className="mb-3 text-[12px] text-ink-muted">
+          Only for APIs that ask for one (mutual TLS). The files stay on this Mac; write <span className="font-mono">{'${VAR}'}</span> in a path to keep it out of a shared project.
+        </p>
+        <TlsFields env={env} set={set} />
       </section>
 
       <section>
@@ -262,8 +285,10 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
             label="Allow writes"
           />
           <div className="flex-1 text-[12px]">
-            <div className="font-semibold">{env.allowWrites ? 'Agents can change data here' : 'Read-only for agents'}</div>
+            {/* The switch's own name, so on and off read the right way round; the state goes underneath. */}
+            <div className="font-semibold">Let agents change data</div>
             <div className="text-ink-muted">
+              {env.allowWrites ? 'On — agents can create, change and delete here. ' : 'Off — read-only for agents. '}
               {toolsOffered} request{toolsOffered === 1 ? '' : 's'} offered.{' '}
               {env.allowWrites ? 'Destructive ones still need confirm: true.' : hidden ? `${hidden} that change data are hidden. You can still send them yourself from Requests.` : ''}
             </div>
@@ -292,6 +317,319 @@ function EnvEditor({ env, active, makeActive, duplicate, remove, rename }: { env
   );
 }
 
+/// OAuth 2: a service account (client credentials), or a person signing in
+/// once in the browser (authorization code with PKCE). Up front, only what
+/// people know: the provider's address, the client, its secret. The rest is
+/// found from the provider, or waits under More options.
+function OAuthFields({ env, a, setAuth }: { env: EnvDef; a: Extract<AuthSpec, { type: 'oauth2' }>; setAuth: (x: AuthSpec) => void }): JSX.Element {
+  const { project, path, secrets, say, refreshSecrets } = useStore();
+  const [busy, setBusy] = useState(false);
+  const [finding, setFinding] = useState(false);
+  const [found, setFound] = useState<{ tone: 'good' | 'warn' | 'note'; text: string } | null>(null);
+  const [issuer, setIssuer] = useState(a.issuer ?? '');
+  // URLs typed in, or brought by an import: show them.
+  const [more, setMore] = useState(!a.issuer && !!a.tokenUrl);
+  const prefix = varPrefix(project!.name);
+  const code = a.grant === 'authorization_code';
+  const redirect = `http://127.0.0.1:${a.redirectPort ?? 47801}/callback`;
+  const signedIn = !!(a.refreshTokenVar && secrets[a.refreshTokenVar]);
+  const ready = !!a.tokenUrl && (!code || !!a.authUrl);
+  const row = (label: string, control: JSX.Element) => (
+    <label className="flex items-center gap-2 text-[12px]">
+      <span className="w-24 shrink-0 text-ink-muted">{label}</span>
+      {control}
+    </label>
+  );
+  /// `given`: a preset's address, with what the preset sets alongside it.
+  const find = async (given?: string, patch: Partial<typeof a> = {}) => {
+    const at = (given ?? issuer).trim();
+    if (!at || (!given && at === a.issuer && a.tokenUrl)) return;
+    const base = { ...a, ...patch };
+    setFinding(true);
+    const r = await window.overapi.invoke('oauth:discover', at);
+    setFinding(false);
+    if (!r.ok) {
+      setAuth({ ...base, issuer: at });
+      setFound({ tone: 'warn', text: r.error });
+      setMore(true);
+      return;
+    }
+    // A person's sign-in needs offline_access for a refresh token, where the provider has it.
+    const offline =
+      base.grant === 'authorization_code' && !base.scope && r.scopes?.includes('offline_access') ? [r.scopes.includes('openid') ? 'openid' : '', 'offline_access'].filter(Boolean).join(' ') : undefined;
+    setAuth({ ...base, issuer: at, tokenUrl: r.tokenUrl, authUrl: r.authUrl ?? base.authUrl, scope: base.scope ?? offline });
+    setFound({ tone: 'good', text: `Found ${new URL(r.tokenUrl).host}${r.authUrl ? '’s token and sign-in pages' : '’s token address'}.` });
+  };
+  const issuerBox = useRef<HTMLInputElement>(null);
+  /// The usual providers in one click. Google and Microsoft are found
+  /// straight away; Okta and Auth0 need the person's own domain first.
+  const preset = (id: 'google' | 'microsoft' | 'okta' | 'auth0') => {
+    if (id === 'google') {
+      const at = 'https://accounts.google.com';
+      setIssuer(at);
+      // Google gives a refresh token only when asked for offline access.
+      void find(at, { grant: 'authorization_code', scope: a.scope ?? 'openid email', authParams: { access_type: 'offline', prompt: 'consent' } });
+    } else if (id === 'microsoft') {
+      const at = 'https://login.microsoftonline.com/organizations/v2.0';
+      setIssuer(at);
+      void find(at, { grant: 'authorization_code', authParams: undefined });
+    } else {
+      setIssuer(id === 'okta' ? 'https://YOUR-DOMAIN.okta.com/oauth2/default' : 'https://YOUR-TENANT.us.auth0.com/');
+      if (id === 'auth0') setMore(true);
+      setFound({
+        tone: 'note',
+        text:
+          id === 'okta'
+            ? 'Put your Okta domain in place of YOUR-DOMAIN, then press Find.'
+            : 'Put your Auth0 domain in place of YOUR-TENANT, then press Find — and set the audience (your API’s identifier) under More options.',
+      });
+      issuerBox.current?.focus();
+    }
+  };
+  const signIn = async () => {
+    setBusy(true);
+    const r = await window.overapi.invoke('oauth:signIn', path!, project!, env.name);
+    setBusy(false);
+    if (!r.ok) return say(r.error, true);
+    say(`Signed in to ${env.name}. Agents use this sign-in too.`);
+    void refreshSecrets();
+  };
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[12px]">
+        <span className="w-24 shrink-0 text-ink-muted">Who signs in</span>
+        <div role="radiogroup" aria-label="Who signs in" className="inline-flex gap-0.5 rounded-lg bg-wash-strong p-0.5">
+          {(
+            [
+              ['client_credentials', 'A service account'],
+              ['authorization_code', 'A person, in the browser'],
+            ] as const
+          ).map(([g, label]) => (
+            <button
+              key={g}
+              type="button"
+              role="radio"
+              aria-checked={a.grant === g}
+              onClick={() => setAuth({ ...a, grant: g })}
+              className={`rounded-md px-2.5 py-1 font-medium ${a.grant === g ? 'bg-surface-elevated text-ink shadow-sm' : 'text-ink-muted hover:text-ink'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="pl-[104px] text-[11px] text-ink-faint">
+        {code
+          ? 'Sign in once here. The refresh token is kept in the keychain, so this app and agents get fresh tokens without signing in again.'
+          : 'overapi gets a token with the client’s id and secret, and a new one when it runs out.'}
+      </p>
+      <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+        <span className="w-24 shrink-0 text-ink-muted">Quick setup</span>
+        {(
+          [
+            ['google', 'Google'],
+            ['microsoft', 'Microsoft'],
+            ['okta', 'Okta'],
+            ['auth0', 'Auth0'],
+          ] as const
+        ).map(([id, label]) => (
+          <button key={id} type="button" className="btn" onClick={() => preset(id)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="flex items-center gap-2 text-[12px]">
+        <label htmlFor="oauth-issuer" className="w-24 shrink-0 text-ink-muted">
+          Provider
+        </label>
+        <input
+          id="oauth-issuer"
+          className="field font-mono"
+          placeholder="https://auth.acme.example"
+          value={issuer}
+          onChange={(e) => {
+            setIssuer(e.target.value);
+            setFound(null);
+          }}
+          onBlur={() => void find()}
+          onKeyDown={(e) => e.key === 'Enter' && void find()}
+          ref={issuerBox}
+        />
+        <button type="button" className="btn shrink-0" disabled={finding || !issuer.trim()} onClick={() => void find(issuer.trim() !== a.issuer ? undefined : issuer)}>
+          {finding ? 'Looking…' : 'Find'}
+        </button>
+      </div>
+      <p className={`pl-[104px] text-[11px] ${found?.tone === 'good' ? 'text-good' : found?.tone === 'warn' ? 'text-warn' : 'text-ink-faint'}`}>
+        {found?.text ?? (a.tokenUrl ? `Tokens from ${a.tokenUrl}` : 'Its address: overapi finds the token and sign-in pages from it.')}
+      </p>
+      <SecretField label="Client id" varName={a.clientIdVar} onVar={(v) => setAuth({ ...a, clientIdVar: v })} source={secrets[a.clientIdVar]} path={path!} />
+      <SecretField
+        label="Client secret"
+        varName={a.clientSecretVar ?? `${prefix}_CLIENT_SECRET`}
+        onVar={(v) => setAuth({ ...a, clientSecretVar: v })}
+        source={secrets[a.clientSecretVar ?? `${prefix}_CLIENT_SECRET`]}
+        path={path!}
+      />
+      {code && (
+        <>
+          <p className="pl-[104px] text-[11px] text-ink-faint">Leave the secret empty for a public client — the sign-in is protected by PKCE.</p>
+          <div className="flex items-center gap-2 text-[12px]">
+            <span className="w-24 shrink-0 text-ink-muted">Redirect URI</span>
+            <span className="truncate font-mono text-ink">{redirect}</span>
+            <button type="button" className="text-[11px] text-accent hover:underline" onClick={() => void window.overapi.invoke('clipboard:write', redirect).then(() => say('Copied the redirect URI.'))}>
+              Copy
+            </button>
+          </div>
+          <p className="pl-[104px] text-[11px] text-ink-faint">Register this exact address with the provider as an allowed redirect.</p>
+          <div className="flex items-center gap-3 pl-[104px]">
+            <button type="button" className="btn-primary" disabled={busy || !ready} onClick={() => void signIn()}>
+              {busy ? 'Waiting for the browser…' : signedIn ? 'Sign in again' : 'Sign in with the browser'}
+            </button>
+            <span className={`text-[12px] ${signedIn ? 'text-good' : 'text-ink-faint'}`}>
+              {signedIn ? 'Signed in — the refresh token is in the keychain' : ready ? 'Not signed in yet' : 'Find the provider first'}
+            </span>
+          </div>
+        </>
+      )}
+      <button type="button" className="pl-[104px] text-[11.5px] text-accent hover:underline" aria-expanded={more} onClick={() => setMore((m) => !m)}>
+        {more ? 'Fewer options' : 'More options'}
+      </button>
+      {more && (
+        <div className="space-y-2 rounded-lg bg-wash px-3 py-2.5">
+          {row('Token URL', <input className="field font-mono" placeholder="https://auth.acme.example/oauth/token" value={a.tokenUrl} onChange={(e) => setAuth({ ...a, tokenUrl: e.target.value.trim() })} />)}
+          {code && row('Sign-in URL', <input className="field font-mono" placeholder="https://auth.acme.example/authorize" value={a.authUrl ?? ''} onChange={(e) => setAuth({ ...a, authUrl: e.target.value.trim() || undefined })} />)}
+          {row('Scope', <input className="field font-mono" placeholder={code ? 'openid offline_access' : 'read:orders'} value={a.scope ?? ''} onChange={(e) => setAuth({ ...a, scope: e.target.value || undefined })} />)}
+          {row('Audience', <input className="field font-mono" placeholder="only if the provider asks for one" value={a.audience ?? ''} onChange={(e) => setAuth({ ...a, audience: e.target.value.trim() || undefined })} />)}
+          {row(
+            'Secret goes',
+            <select
+              className="field w-64"
+              value={a.clientAuth ?? 'auto'}
+              onChange={(e) => setAuth({ ...a, clientAuth: e.target.value === 'auto' ? undefined : (e.target.value as 'body' | 'basic') })}
+            >
+              <option value="auto">automatically (body, then HTTP Basic)</option>
+              <option value="body">in the request body</option>
+              <option value="basic">as HTTP Basic</option>
+            </select>,
+          )}
+          {code &&
+            row(
+              'Redirect port',
+              <input
+                className="field w-24 font-mono"
+                inputMode="numeric"
+                value={a.redirectPort ?? 47801}
+                onChange={(e) => setAuth({ ...a, redirectPort: Number(e.target.value.replace(/\D/g, '')) || undefined })}
+              />,
+            )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/// A token printed by a command on this Mac. The command is kept like a
+/// secret, so a shared project never runs one you didn't save.
+function CommandFields({ env, a, setAuth }: { env: EnvDef; a: Extract<AuthSpec, { type: 'command' }>; setAuth: (x: AuthSpec) => void }): JSX.Element {
+  const { project, path, secrets, say } = useStore();
+  const [trying, setTrying] = useState(false);
+  const [tried, setTried] = useState<{ ok: boolean; text: string } | null>(null);
+  const tryIt = async () => {
+    setTrying(true);
+    const r = await window.overapi.invoke('auth:tryCommand', path!, project!, env.name);
+    setTrying(false);
+    setTried(r.ok ? { ok: true, text: `Got a token: ${r.preview}` } : { ok: false, text: r.error });
+    if (r.ok) say(`${env.name} signs in with the command’s token.`);
+  };
+  return (
+    <div className="space-y-2">
+      <p className="text-[11px] text-ink-faint">
+        overapi runs it when it needs a token, again after a while, and again when the API answers 401 — for agents too. It’s kept on this Mac like a secret, so a shared project never runs a
+        command you didn’t save. For example <span className="font-mono">gcloud auth print-access-token</span> or{' '}
+        <span className="font-mono">az account get-access-token --query accessToken -o tsv</span>.
+      </p>
+      <SecretField label="Command" varName={a.commandVar} onVar={(v) => setAuth({ ...a, commandVar: v })} source={secrets[a.commandVar]} path={path!} />
+      <div className="flex flex-wrap items-center gap-2 text-[12px]">
+        <span className="w-24 shrink-0 text-ink-muted">Sent as</span>
+        <select className="field w-44" value={a.sendAs} onChange={(e) => setAuth({ ...a, sendAs: e.target.value as 'bearer' | 'header' })}>
+          <option value="bearer">a bearer token</option>
+          <option value="header">a header</option>
+        </select>
+        {a.sendAs === 'header' && (
+          <input className="field w-48 font-mono" placeholder="X-Auth-Token" value={a.name ?? ''} onChange={(e) => setAuth({ ...a, name: e.target.value.trim() || undefined })} aria-label="Header name" />
+        )}
+      </div>
+      <div className="flex items-center gap-2 text-[12px]">
+        <span className="w-24 shrink-0 text-ink-muted">Run again after</span>
+        <input
+          className="field w-20 text-right"
+          inputMode="numeric"
+          value={a.refreshMinutes ?? 15}
+          onChange={(e) => setAuth({ ...a, refreshMinutes: Number(e.target.value.replace(/\D/g, '')) || undefined })}
+          aria-label="Minutes before running it again"
+        />
+        <span className="text-ink-faint">minutes</span>
+      </div>
+      <div className="flex items-center gap-3 pl-[104px]">
+        <button type="button" className="btn" disabled={trying || !secrets[a.commandVar]} onClick={() => void tryIt()}>
+          {trying ? 'Running…' : 'Try it'}
+        </button>
+        <span className={`text-[12px] ${tried ? (tried.ok ? 'text-good' : 'text-warn') : 'text-ink-faint'}`}>{tried?.text ?? (secrets[a.commandVar] ? 'Runs it once and shows the start of the token.' : 'Save the command first.')}</span>
+      </div>
+    </div>
+  );
+}
+
+/// A client certificate for mutual TLS: a cert and key, or one bundle.
+function TlsFields({ env, set }: { env: EnvDef; set: (fn: (e: EnvDef) => EnvDef) => void }): JSX.Element {
+  const { project, path, secrets } = useStore();
+  const tls = env.tls ?? {};
+  const [open, setOpen] = useState(!!env.tls);
+  const prefix = varPrefix(project!.name);
+  const put = (patch: Partial<NonNullable<EnvDef['tls']>>) =>
+    set((e) => {
+      const next = { ...(e.tls ?? {}), ...patch };
+      for (const k of Object.keys(next) as (keyof typeof next)[]) if (!next[k]) delete next[k];
+      const files = next.certFile || next.keyFile || next.pfxFile || next.caFile;
+      if (files && !next.passphraseVar && (next.keyFile || next.pfxFile)) next.passphraseVar = `${prefix}_CERT_PASSPHRASE`;
+      return { ...e, tls: files ? next : undefined };
+    });
+  const file = (label: string, key: 'certFile' | 'keyFile' | 'pfxFile' | 'caFile', placeholder: string) => (
+    <div className="flex items-center gap-2 text-[12px]">
+      <span className="w-24 shrink-0 text-ink-muted">{label}</span>
+      <input className="field font-mono" placeholder={placeholder} value={tls[key] ?? ''} onChange={(e) => put({ [key]: e.target.value })} aria-label={label} />
+      <button
+        type="button"
+        className="btn shrink-0"
+        onClick={async () => {
+          const f = await window.overapi.invoke('dialog:pickFile', label);
+          if (f) put({ [key]: f });
+        }}
+      >
+        Choose…
+      </button>
+    </div>
+  );
+  if (!open)
+    return (
+      <button type="button" className="btn" onClick={() => setOpen(true)}>
+        Add a client certificate
+      </button>
+    );
+  return (
+    <div className="space-y-2">
+      {file('Certificate', 'certFile', '~/certs/client.pem')}
+      {file('Key', 'keyFile', '~/certs/client.key')}
+      <p className="pl-[104px] text-[11px] text-ink-faint">Or one bundle instead of the two:</p>
+      {file('Bundle (.p12)', 'pfxFile', '~/certs/client.p12')}
+      {file('CA to trust', 'caFile', 'only for a private CA')}
+      {tls.passphraseVar && (
+        <SecretField label="Passphrase" varName={tls.passphraseVar} onVar={(v) => put({ passphraseVar: v })} source={secrets[tls.passphraseVar]} path={path!} />
+      )}
+    </div>
+  );
+}
+
 const SOURCE_TEXT: Record<Exclude<SecretSource, null>, string> = {
   keychain: 'saved in keychain',
   env: 'from your shell',
@@ -300,7 +638,9 @@ const SOURCE_TEXT: Record<Exclude<SecretSource, null>, string> = {
 
 /// Signed in through overapi's browser: the person's own session on a web
 /// app, as the environment's Cookie (and CSRF or token) headers.
-function BrowserSession({ env, set }: { env: EnvDef; set: (fn: (e: EnvDef) => EnvDef) => void }): JSX.Element {
+/// `alongside`: another sign-in is picked, and the session goes out with it
+/// — one line saying so, not a second sign-in competing for attention.
+function BrowserSession({ env, set, alongside }: { env: EnvDef; set: (fn: (e: EnvDef) => EnvDef) => void; alongside?: boolean }): JSX.Element {
   const { project, path, say, refreshSecrets, info } = useStore();
   const p = project!;
   const [via, setVia] = useState<'overapi' | 'chrome'>(env.browserSession?.via ?? 'overapi');
@@ -327,7 +667,11 @@ function BrowserSession({ env, set }: { env: EnvDef; set: (fn: (e: EnvDef) => En
     if (!r.ok) return say(r.error, true);
     set((e) => ({ ...e, auth: r.headers.Authorization ? { type: 'none' } : e.auth, headers: { ...Object.fromEntries(Object.entries(e.headers ?? {}).filter(([, v]) => !isSessionHeader(v))), ...r.headers }, browserSession: { site: r.site, at: r.at, via: r.via } }));
     await refreshSecrets();
-    say(`${env.name} signs in with your browser session now (${r.found.join(', ')}).`);
+    say(
+      alongside
+        ? `Signed in again at ${r.site.replace(/^https?:\/\//, '')}. ${env.name} sends this session along with its other sign-in.`
+        : `${env.name} signs in with your browser session now (${r.found.join(', ')}).`,
+    );
   };
 
   const stop = async () => {
@@ -383,6 +727,23 @@ function BrowserSession({ env, set }: { env: EnvDef; set: (fn: (e: EnvDef) => En
             Stop using the old one
           </button>
         </div>
+      </div>
+    );
+  }
+  if (s && alongside) {
+    return (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg bg-wash px-3 py-2 text-[12px]">
+        <Icon name="globe" size={13} className="shrink-0 text-ink-faint" />
+        <span className="min-w-0 flex-1 text-ink-muted">
+          As well as this sign-in, also sends your browser session from <span className="font-mono">{s.site.replace(/^https?:\/\//, '').replace(/\/$/, '')}</span> ({sent.map(([k]) => k).join(', ') || 'cookies'}) on
+          every request.
+        </span>
+        <button type="button" className="text-[11.5px] text-accent hover:underline disabled:opacity-50" disabled={busy} onClick={() => void run('browser:signIn')}>
+          Sign in again
+        </button>
+        <button type="button" className="text-[11.5px] text-bad hover:underline disabled:opacity-50" disabled={busy} onClick={() => void stop()}>
+          Stop using it
+        </button>
       </div>
     );
   }
@@ -530,7 +891,14 @@ function LoginFields({ env, a, setAuth }: { env: EnvDef; a: Extract<AuthSpec, { 
             The values saved on {login ? <b className="text-ink">{login.name}</b> : 'it'} — its Params and Body. Write <span className="font-mono">{'${ACME_PASSWORD}'}</span> for a secret; the value comes from the keychain.
           </p>
           {creds.map((v) => (
-            <SecretField key={v} label={v} varName={v} onVar={() => undefined} source={secrets[v]} path={path!} />
+            // Labelled by the field it fills (password), not the secret's own long name.
+            <SecretField
+              key={v}
+              label={Object.entries(login?.example ?? {}).find(([, x]) => typeof x === 'string' && x.includes(`\${${v}}`))?.[0] ?? v}
+              varName={v}
+              source={secrets[v]}
+              path={path!}
+            />
           ))}
           {login && (
             <button
@@ -619,7 +987,8 @@ function LoginFields({ env, a, setAuth }: { env: EnvDef; a: Extract<AuthSpec, { 
   );
 }
 
-export function SecretField({ label, varName, onVar, source, path }: { label: string; varName: string; onVar: (v: string) => void; source: SecretSource | undefined; path: string }): JSX.Element {
+/// `onVar` absent: the name is fixed here (something else uses it) — shown, not edited.
+export function SecretField({ label, varName, onVar, source, path }: { label: string; varName: string; onVar?: (v: string) => void; source: SecretSource | undefined; path: string }): JSX.Element {
   const { refreshSecrets, say } = useStore();
   const [value, setValue] = useState('');
   const save = async (v: string) => {
@@ -631,7 +1000,9 @@ export function SecretField({ label, varName, onVar, source, path }: { label: st
   };
   return (
     <div className="flex items-center gap-2 text-[12px]">
-      <span className="w-24 text-ink-muted">{label}</span>
+      <span className="w-24 shrink-0 truncate text-ink-muted" title={label}>
+        {label}
+      </span>
       <input
         className="field flex-1"
         type="password"
@@ -642,12 +1013,18 @@ export function SecretField({ label, varName, onVar, source, path }: { label: st
       />
       <button className="btn" disabled={!value} onClick={() => void save(value)}>Save</button>
       {source === 'keychain' && <button className="text-[11px] text-ink-faint hover:text-bad" onClick={() => void save('')}>Remove</button>}
-      <input
-        className="field w-48 font-mono text-[11px] text-ink-muted"
-        title="The variable name: what a published copy or a client’s env block sets"
-        value={varName}
-        onChange={(e) => onVar(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
-      />
+      {onVar ? (
+        <input
+          className="field w-48 font-mono text-[11px] text-ink-muted"
+          title="The variable name: what a published copy or a client’s env block sets"
+          value={varName}
+          onChange={(e) => onVar(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, '_'))}
+        />
+      ) : (
+        <span className="w-48 shrink-0 truncate px-1 font-mono text-[11px] text-ink-faint" title={`The variable name: what a published copy or a client’s env block sets`}>
+          {varName}
+        </span>
+      )}
     </div>
   );
 }
