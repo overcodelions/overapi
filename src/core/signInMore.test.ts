@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { borrowSignIn, callTool } from './flow';
+import { withKeychain } from './vars';
 import type { AuthSpec, EnvDef, Project, ToolDef } from '../shared/project';
 
 const tool = (id: string, method: ToolDef['method'], p: string): ToolDef => ({
@@ -74,7 +75,10 @@ describe('signed in by another API', () => {
       vars: none,
       runtime: {},
       run: async () => 'cmd-tok\n',
-      peer: peer({ type: 'command', commandVar: 'ACME_SSO_CMD', sendAs: 'header', name: 'X-Acme-Token' }, (n) => (n === 'ACME_SSO_CMD' ? 'acme-sso token' : undefined)),
+      peer: peer(
+        { type: 'command', commandVar: 'ACME_SSO_CMD', sendAs: 'header', name: 'X-Acme-Token' },
+        withKeychain((n) => (n === 'ACME_SSO_CMD' ? 'acme-sso token' : undefined), none),
+      ),
     });
     expect(b.headers['x-acme-token']).toBe('cmd-tok');
   });
@@ -105,7 +109,7 @@ describe('a 403 counts as a refusal too', () => {
     const tokens = ['tok-1', 'tok-2'];
     const { seen, fetchImpl } = api(() => 'unused');
     const env = envOf({ type: 'command', commandVar: 'CMD', sendAs: 'bearer' });
-    const out = await callTool(projectOf(env), orders, env, {}, { vars: () => 'acme-sso token', runtime: {}, fetchImpl, run: async () => tokens.shift()! });
+    const out = await callTool(projectOf(env), orders, env, {}, { vars: withKeychain(() => 'acme-sso token', none), runtime: {}, fetchImpl, run: async () => tokens.shift()! });
     expect([seen, out.result.ok]).toEqual([['Bearer tok-1', 'Bearer tok-2'], true]);
   });
 
@@ -113,7 +117,7 @@ describe('a 403 counts as a refusal too', () => {
     const env = envOf({ type: 'command', commandVar: 'CMD', sendAs: 'bearer' });
     const fetchImpl = (async () => json({ error: 'forbidden' }, 403)) as unknown as typeof fetch;
     let runs = 0;
-    const out = await callTool(projectOf(env), orders, env, {}, { vars: () => 'x', runtime: {}, fetchImpl, run: async () => `tok-${++runs}` });
+    const out = await callTool(projectOf(env), orders, env, {}, { vars: withKeychain(() => 'x', none), runtime: {}, fetchImpl, run: async () => `tok-${++runs}` });
     expect([out.result.status, runs]).toEqual([403, 2]);
   });
 });

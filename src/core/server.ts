@@ -47,6 +47,9 @@ export interface ServeOptions {
   readOnly?: boolean;
   /// Finds another API by name, for "signed in by another API".
   peer?: (api: string, path?: string) => Peer | undefined;
+  /// Why a project's secrets are held back (not approved in the app), if
+  /// they are. `memberPath`: the member's file in a system, else ''.
+  blocked?: (memberPath: string, project: Project) => string | undefined;
   /// Serve a system — all its members, as one server — instead of
   /// `project`. Each member uses its own environment of `envName`.
   system?: () => SystemSource;
@@ -239,7 +242,14 @@ export function createServer(opts: ServeOptions): Server {
     }
     try {
       // Signs in first when the API needs it, and retries once on a 401.
-      const { result, kept, signedIn, hint } = await callTool(project, tool, env, args, { vars: entry.vars, runtime: runtimeFor(entry.key), fetchImpl: opts.fetchImpl, peer });
+      const { result, kept, signedIn, hint } = await callTool(project, tool, env, args, {
+        vars: entry.vars,
+        runtime: runtimeFor(entry.key),
+        fetchImpl: opts.fetchImpl,
+        peer,
+        blocked: () => opts.blocked?.(entry.key, project),
+        fromAgent: true,
+      });
       if (signedIn) log(`signed in for ${env.name}`);
       log(`${name} ${result.request.method} ${result.request.url} -> ${result.status} in ${result.durationMs} ms`);
       const head = `HTTP ${result.status}${result.statusText ? ` ${result.statusText}` : ''}`;

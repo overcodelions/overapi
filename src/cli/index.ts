@@ -15,12 +15,14 @@ import { buildRequest, send, shown } from '../core/http';
 import { createServer, pickEnv, type SystemSource } from '../core/server';
 import type { Peer } from '../core/flow';
 import { isSystemFile } from '../shared/system';
+import { heldBack } from '../core/trust';
+import { usesSecrets } from '../shared/trust';
 import { isPrivateHost, PUBLIC_LOAD_LIMITS } from '../shared/network';
 import { liveProject, readProject, writeProject } from '../core/projectFile';
-import { varSource, type VarSource } from '../core/vars';
+import { varSource, type VarSource, withKeychain } from '../core/vars';
 import { checkProject } from '../shared/check';
 import { snippets, type ClientId, type ServeCommand } from '../shared/install';
-import { envVars, offered, varPrefix } from '../shared/project';
+import { envVars, offered, varPrefix, type Project } from '../shared/project';
 import { forEnv, scanProject, type Severity } from '../shared/scan';
 import { runLoad, runScenario, LOAD_LIMITS } from '../core/scenario';
 import type { ScenarioRun } from '../shared/scenario';
@@ -129,7 +131,7 @@ async function main(argv: string[]): Promise<void> {
     const log = (line: string) => process.stderr.write(`overapi: ${line}\n`);
     const system = () => loadSystem(file);
     const first = system();
-    const server = createServer({ project: () => first.members[0].project, system, envName, vars: varsFor(file), log, peer: peerFinder(file) });
+    const server = createServer({ project: () => first.members[0].project, system, envName, vars: varsFor(file), log, peer: peerFinder(file), blocked: (key, project) => blockedFor(key || file, project) });
     await server.connect(new StdioServerTransport());
     process.stdin.on('close', () => process.exit(0));
     log(`serving workspace ${first.name} (${envName}) — ${first.members.length} APIs`);
@@ -174,6 +176,8 @@ async function main(argv: string[]): Promise<void> {
     } catch (e) {
       die(`--args is not JSON: ${(e as Error).message}`);
     }
+    const held = blockedFor(file, project);
+    if (held && usesSecrets(env, tool)) die(held);
     const built = buildRequest(tool, env, parsed, varsFor(file));
     const r = shown(built);
     process.stderr.write(`→ ${r.method} ${r.url}\n`);
@@ -188,7 +192,7 @@ async function main(argv: string[]): Promise<void> {
     const envName = flag(args, '--env');
     const log = (line: string) => process.stderr.write(`overapi: ${line}\n`);
     const env = pickEnv(project, envName);
-    const server = createServer({ project: liveProject(file, log), envName: env.name, vars: varsFor(file), log, peer: peerFinder(file) });
+    const server = createServer({ project: liveProject(file, log), envName: env.name, vars: varsFor(file), log, peer: peerFinder(file), blocked: (key, project) => blockedFor(key || file, project) });
     await server.connect(new StdioServerTransport());
     // The client closing stdin is the end of the session. Under Node that
     // would end the process anyway; inside the app binary it would not.
@@ -215,6 +219,8 @@ async function main(argv: string[]): Promise<void> {
     const writes = bool(args, '--writes');
     const scenarios = (project.scenarios ?? []).filter((s) => !only || s.name === only);
     if (!scenarios.length) die(only ? `no scenario named ${only}` : 'this API has no test scenarios yet. Record traffic in the app and save it as a test.');
+    const held = blockedFor(file, project);
+    if (held) die(held);
     const runs: { name: string; run: ScenarioRun }[] = [];
     for (const sc of scenarios) {
       process.stdout.write(`\n${sc.name} — ${env.name} (${env.baseUrl})\n`);
@@ -266,6 +272,8 @@ async function main(argv: string[]): Promise<void> {
       if (!args.includes('--i-have-permission')) die(`${env.baseUrl} is a public host. Load testing it is traffic its owners didn't ask for. If you run it or have permission, add --i-have-permission (held to ${PUBLIC_LOAD_LIMITS.users} users for ${PUBLIC_LOAD_LIMITS.durationSec} s).`);
       if (users > PUBLIC_LOAD_LIMITS.users || durationSec > PUBLIC_LOAD_LIMITS.durationSec) die(`on a public host, at most ${PUBLIC_LOAD_LIMITS.users} users for ${PUBLIC_LOAD_LIMITS.durationSec} s`);
     }
+    const held = blockedFor(file, project);
+    if (held) die(held);
     process.stdout.write(`Load: ${sc.name} on ${env.name} (${env.baseUrl}) — ${users} users, ${durationSec} s, reads only\n`);
     const out = await runLoad(project, sc, env, {
       vars: varsFor(file), peer: peerFinder(file),
@@ -301,19 +309,27 @@ function toJunit(runs: { name: string; run: ScenarioRun }[]): string {
 /// with everything from `serve` on.
 /// `extraVars`: where the app binary finds secrets saved in the keychain,
 /// consulted before the environment and the .env file.
-export function run(argv: string[], command?: ServeCommand, extraVars?: (projectPath: string) => VarSource): Promise<void> {
+/// `trust`: whether the app has approved a project as it is now. Not
+/// approved: its secrets are held back. Run on its own (no app), the CLI
+/// trusts the file it was handed — running it is the choice.
+export function run(argv: string[], command?: ServeCommand, extraVars?: (projectPath: string) => VarSource, trust?: (projectPath: string, project: Project) => boolean): Promise<void> {
   if (command) selfCommandOverride = command;
   if (extraVars) keychainVars = extraVars;
+  if (trust) trustCheck = trust;
   return main(argv).catch((e) => die((e as Error).message));
 }
 
 let selfCommandOverride: ServeCommand | undefined;
 let keychainVars: ((projectPath: string) => VarSource) | undefined;
+let trustCheck: ((projectPath: string, project: Project) => boolean) | undefined;
 
 function varsFor(file: string): VarSource {
-  const local = varSource(file);
-  const kc = keychainVars?.(path.resolve(file));
-  return kc ? (name) => kc(name) ?? local(name) : local;
+  return withKeychain(keychainVars?.(path.resolve(file)), varSource(file));
+}
+
+/// Why a project's secrets are held back, if the app hasn't approved it.
+function blockedFor(file: string, project: Project): string | undefined {
+  return trustCheck && !trustCheck(path.resolve(file), project) ? heldBack(project.title) : undefined;
 }
 
 function readJsonQuiet(file: string): unknown {
@@ -354,7 +370,7 @@ function peerFinder(file: string): (api: string, at?: string) => Peer | undefine
         const project = readProject(p);
         if (project.name !== api) continue;
         if (!sessions.has(p)) sessions.set(p, {});
-        return { project, vars: varsFor(p), runtime: sessions.get(p)! };
+        return { project, vars: varsFor(p), runtime: sessions.get(p)!, blocked: blockedFor(p, project) };
       } catch {
         // Not there.
       }

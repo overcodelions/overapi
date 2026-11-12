@@ -36,3 +36,32 @@ AI features run your own `claude` or `codex` CLI with your own login. Runs are l
 - Requests go only to the environment's base URL. Self-signed certificates are accepted for `localhost` only.
 - Scanning for local servers sends plain `GET`s to `127.0.0.1` and nothing else.
 - The explorer clicks links and buttons on a site you choose, and skips anything that looks like delete, pay, send or sign out.
+
+## Projects from other people
+
+A project is meant to be shared through git, so overapi treats a project file
+it didn't write as untrusted. A project names where requests go, how they sign
+in and which secrets they read — so one written by someone else could aim your
+secrets at their own server.
+
+- **Approval, once per project.** A project that's new to overapi, or whose
+  sign-in, addresses, secrets, borrowed sign-ins or request labels changed
+  outside the app (a clone, a `git pull`), sends nothing secret — in the app or
+  to agents through `overapi serve` — until you review a plain summary of what
+  it would do and allow it. Your own edits in the app keep it approved; editing
+  a project that's waiting for review doesn't approve it.
+- **Token commands come only from your keychain**, never from the environment
+  or a `.env` a repository could bring with it.
+- **Files.** The app uploads only files you picked yourself. A request's saved
+  values, defaults and "run first" steps can't name a file on your Mac, and
+  agents can only send a file's content.
+- **Agents can't name secrets.** `${SECRET}` in an agent's own arguments is sent
+  as written, never filled in.
+- **Sign-in pages** are opened in your browser only when they're https (or http
+  on this machine).
+- **Local listeners** — the recorder, the OAuth redirect, the Ask panel's server
+  — bind to 127.0.0.1, and the recorder answers only requests addressed to
+  localhost.
+
+The `overapi` CLI run on its own (not through the app) trusts the project file
+it's given: running it on a file is the choice.

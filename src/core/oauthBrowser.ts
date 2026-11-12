@@ -20,16 +20,22 @@ export function waitForCode(opts: { port: number; state: string; timeoutMs?: num
         rs.writeHead(404).end();
         return;
       }
+      // Not this sign-in's answer — a stray request, or a page trying to end
+      // it: say so and keep waiting for the real one.
+      if (u.searchParams.get('state') !== opts.state) {
+        rs.writeHead(400, { 'content-type': 'text/html; charset=utf-8' }).end(page('This isn’t the sign-in overapi is waiting for.'));
+        return;
+      }
       const err = u.searchParams.get('error');
       const code = u.searchParams.get('code');
-      const ok = !err && u.searchParams.get('state') === opts.state && !!code;
+      const ok = !err && !!code;
       rs.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(
         page(ok ? 'Signed in. You can close this tab and go back to overapi.' : 'Sign-in didn’t finish. Go back to overapi to try again.'),
       );
       clearTimeout(timer);
       server.close();
       if (ok) resolve(code!);
-      else reject(new Error(err ? `The provider said: ${u.searchParams.get('error_description') ?? err}.` : 'The answer didn’t match this sign-in. Try again.'));
+      else reject(new Error(err ? `The provider said: ${u.searchParams.get('error_description') ?? err}.` : 'The provider came back without a code. Try again.'));
     });
     const timer = setTimeout(
       () => {

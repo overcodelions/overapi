@@ -79,11 +79,13 @@ interface State {
   /// Where each project's server was installed from the app.
   /// claudeByEnv: one entry per environment installed — each is its own server.
   installed: Record<string, { claude?: { at: string; env: string; name: string }; claudeByEnv?: Record<string, { at: string; name: string }> }>;
+  /// Approved projects: path → the fingerprint approved (core/trust.ts).
+  trusted?: Record<string, string>;
 }
 
 function state(): State {
   const s = readJson<Partial<State>>(path.join(dir(), 'state.json'), {});
-  return { projects: Array.isArray(s.projects) ? s.projects.filter((p) => typeof p === 'string') : [], systems: Array.isArray(s.systems) ? s.systems.filter((p) => typeof p === 'string') : [], published: s.published ?? {}, installed: s.installed ?? {} };
+  return { projects: Array.isArray(s.projects) ? s.projects.filter((p) => typeof p === 'string') : [], systems: Array.isArray(s.systems) ? s.systems.filter((p) => typeof p === 'string') : [], published: s.published ?? {}, installed: s.installed ?? {}, trusted: s.trusted };
 }
 
 export function markInstalled(p: string, claude: { at: string; env: string; name: string }): void {
@@ -187,4 +189,25 @@ export function recordSeen(p: string, env: string, toolId: string, fresh: import
 
 export function clearSeen(p: string): void {
   writeJson(seenFile(p), {});
+}
+
+// ---- approvals ----------------------------------------------------------------
+
+export function hasTrustStore(): boolean {
+  return !!state().trusted;
+}
+
+/// The first run with approvals: the projects already here are the person's.
+export function seedTrust(map: Record<string, string>): void {
+  const s = state();
+  writeJson(path.join(dir(), 'state.json'), { ...s, trusted: { ...map, ...(s.trusted ?? {}) } });
+}
+
+export function trustOf(p: string): string | undefined {
+  return state().trusted?.[p];
+}
+
+export function trustProject(p: string, fingerprint: string): void {
+  const s = state();
+  writeJson(path.join(dir(), 'state.json'), { ...s, trusted: { ...(s.trusted ?? {}), [p]: fingerprint } });
 }

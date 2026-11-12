@@ -178,8 +178,21 @@ export function pkce(): { verifier: string; challenge: string } {
 }
 
 /// The provider's sign-in page, asking it to come back with a code.
+/// An address it's safe to hand the system browser: https, or http on this
+/// machine. Never file:, an app's own scheme, or anything else a project
+/// file could use to open something locally.
+export function isBrowserSafe(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' || (u.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 export function authorizeUrl(a: OAuth2, clientId: string, challenge: string, state: string): string {
   if (!a.authUrl) throw new Error('OAuth: set the authorization URL to sign in with the browser.');
+  if (!isBrowserSafe(a.authUrl)) throw new Error(`OAuth: the sign-in page must be an https address, not ${a.authUrl.split(':')[0]}:.`);
   const u = new URL(a.authUrl);
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', clientId);
