@@ -22,6 +22,10 @@
   <a href="https://github.com/overcodelions/overdb">overdb</a>
 </p>
 
+<p align="center">
+  <img alt="overapi — the workbench: Acme Orders' requests, list_orders sent to a local server with status=open, and the response as a table" src="docs/screenshots/workbench.png" width="100%" />
+</p>
+
 ---
 
 Every company has APIs agents should be able to use — and almost none of them come with a clean spec. Some have Swagger behind a login, some are SOAP, some exist only as the calls a web app makes. Pointing an agent at them raw gets you a hundred cryptic tools, ids it can't find, and a `DELETE` it shouldn't see.
@@ -33,9 +37,9 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 | | |
 |---|---|
 | **1 · Bring it in** | A spec, a cURL, a HAR, a Postman collection, a WSDL, the docs, the service's own source code — or record the web app that uses it. |
-| **2 · Use it** | A fast workbench: environments, sign-in, the params that matter, responses you can read, and tests. |
-| **3 · Make it agent-ready** | One pass that tidies, connects and documents it — rules first, then your own claude or codex — with every change shown before it's applied. |
-| **4 · Publish** | Into Claude Code in one click, to any MCP client as a snippet, or to your team through overgo. |
+| **2 · Use it** | A fast workbench: environments, sign-in, the params that matter, responses you can read as a table, a chart or JSON, and tests. |
+| **3 · Make it agent-ready** | One pass that tidies, connects and documents it — rules first, then your own claude or codex — with every change shown before it's applied. Then try it as an agent. |
+| **4 · Publish** | Into Claude Code in one click, to any MCP client as a snippet, to your team through overgo, or as a file to commit. |
 
 ## Ways in
 
@@ -46,10 +50,12 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 - **From documentation.** PDFs, Markdown or HTML, a docs URL, or pasted text. claude finds the real spec files if the site links to them, and drafts one if it doesn't.
 - **Record a web app.** Sign in and use the app in overapi's browser — or your own Chrome, password manager and all — and its API calls become requests. Or let **Explore for me** click around on its own, skipping anything that looks like delete, pay or sign out.
 - **SOAP.** Each operation becomes a request with typed arguments; overapi builds the envelope (1.1 or 1.2, WS-Security if needed) and agents see JSON in and out.
+- **Paste it anywhere.** ⌘V a cURL, a spec or a docs URL outside a text field and New API opens with it already in.
 
 ## The workbench
 
 - **Params as a query, not a form.** What's being sent sits on top, one line each; everything else the request takes waits below as chips. Each kind of value gets its own control: a three-way *any · true · false* switch, chips for lists, a stepper for numbers, fields for objects. The address bar spells out the query as you go, and pasting a URL fills the params from it.
+- **Responses you can read.** A list comes back as a table, numbers as a chart when they chart, and the full JSON is always a click away — with headers, a timeline and the request's history beside it.
 - **Values it has already seen.** Click an id and pick from the ones earlier responses held, by name — "Acme Supply Co", not `076f0e8a…`. Nothing seen yet? Run the request that lists them, from the same dropdown.
 - **Chains.** overapi works out which request gives the ids another needs (`list_accounts → content[0].id → get_account.accountId`), keeps them for the next call, and runs a login first when the API needs one.
 - **Environments.** Local, staging and production, colour-coded, each with its base URL, sign-in, variables and headers. New environments start read-only; allowing writes on production means typing its name.
@@ -57,18 +63,35 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 - **Client certificates.** Mutual TLS per environment: a cert and key, or a .p12 bundle, and a private CA if you need one.
 - **Bodies.** JSON, form, multipart with file uploads, GraphQL with variables, and SOAP. Agents send a file's content, never a path on your Mac.
 - **Copy as code.** cURL, fetch, Python or HTTPie, secrets shown as •••.
-- **Tests.** Turn a recording into a test that checks status and response shape, and run it in CI (`overapi test --junit`). Load-testing a scenario's reads is there too, off by default (Settings › General) — pointed at the wrong environment it's the easiest way to hurt a real API.
+- **Tests.** Turn a recording — or a response, with *Add to test* — into a test that checks status and response shape, and run it in CI (`overapi test --junit`). Load-testing a scenario's reads is there too, off by default (Settings › General) — pointed at the wrong environment it's the easiest way to hurt a real API.
+- **⌘K** jumps to any request, API or workspace.
 
 ## Agent-ready
 
-- **Make it agent-ready.** Tidies what a recording picked up, fixes values that never change, connects the chains, then your claude or codex writes descriptions, argument help, clearer names, what to hide, a brief for the agent and example questions. You see every change, before → after, and the readiness and security scores move as you pick.
+Each API has an **MCP server** page — what agents get from it, with how ready it is in the title bar.
+
+- **Make it agent-ready.** Tidies what a recording picked up, fixes values that never change, connects the chains, then your claude or codex writes descriptions, argument help, clearer names, what to hide, a brief for the agent and example questions. You see every change, before → after, and the readiness and security scores move as you pick. No claude or codex? *Steps 1–3 only* runs the rules on their own.
+
+<p align="center">
+  <img alt="Make Acme Support agent-ready — a raw web-app recording: two tidy-ups, workspace fixed at acme-eu, and three chains passing ticket_id from the ticket list, each change checked before it's applied" src="docs/screenshots/agent-ready.png" width="100%" />
+</p>
+
 - **Tools.** A budget bar, suggestions for what to turn off and why, and a per-tool editor.
+- **Chains.** Which tool gives the ids another needs, and what the agent is told about it.
 - **Security scan.** Leaked secrets, what agents can reach, prompt injection in descriptions, personal data in examples. Critical findings block team publishing until fixed or accepted with a reason.
-- **Try as an agent.** Ask a question in plain words; claude answers through this API's own MCP server, read-only, and you watch every tool call. Save the run as a test.
+- **Try as an agent.** Ask a question in plain words; claude answers through this API's own MCP server, read-only, and you watch every tool call. Save the run as a test. Or *Call a tool* yourself — no AI — and see exactly what the agent reads back, and what it would likely call next.
+
+<p align="center">
+  <img alt="Try as an agent on Acme Orders: list_orders called with status=open over MCP, its description and arguments on the left and the JSON the agent reads back on the right" src="docs/screenshots/try-as-agent.png" width="100%" />
+</p>
 
 ## Workspaces
 
-Services that belong together — the APIs of one product — grouped, with **one sign-in** (the security service signs the others in), **one place to set where each runs** in every environment, and **one MCP server** for the lot, with ids flowing from one service to the next.
+Services that belong together — the APIs of one product — grouped, with **one sign-in** (the security service signs the others in), **one place to set where each runs** in every environment, and **one MCP server** for the lot, with ids flowing from one service to the next. A workspace is a file too (`overapi-system.json`), and `overapi serve` runs it.
+
+<p align="center">
+  <img alt="The Acme Storefront workspace: Acme Accounts signs in Acme Orders and Acme Inventory, and a grid of where each runs in local, staging and production" src="docs/screenshots/workspace.png" width="100%" />
+</p>
 
 ## Publish
 
@@ -76,13 +99,22 @@ Services that belong together — the APIs of one product — grouped, with **on
 - **Your team.** Hand it to overgo through overcli: only the chosen environment, the tools that are on, and the *names* of its secrets. An admin finishes it in overgo's console.
 - **Git.** A project is a folder: `overapi.json` — readable, diffable, and what `overapi serve` runs — beside a `.gitignore` that keeps `.env` out. Commit it with the API's code; teammates open the folder and add their own secrets. That's the shared collection: no account, no cloud workspace.
 
+<p align="center">
+  <img alt="Publish Acme Orders: add the local environment to Claude Code or another client, hand staging to the team through overgo, or export the file" src="docs/screenshots/publish.png" width="100%" />
+</p>
+
 ## Safety
 
 - Tools are read, write or destructive. Write tools stay hidden until an environment allows writes; destructive ones also need `confirm: true` and carry `destructiveHint`, so clients ask you first.
 - Secrets live in the keychain, never in a project file, and are scrubbed from everything shown or returned. The renderer can set a secret but never read one.
 - Your browser sign-ins are yours: they never publish.
-- A project from someone else — a clone, a pull that changed it — can't use your secrets until you've reviewed where they'd go and allowed it. Token commands only come from your keychain, and only files you pick are uploaded.
+- A project from someone else — a clone, a pull that changed where it sends things or how it signs in — can't use your secrets until you've reviewed where they'd go and allowed it: in the app, and for agents through the app's `serve`. Your own edits keep a project approved, and one with nothing secret isn't asked about. (Run straight from the CLI, overapi trusts the file you hand it — running it is the choice.)
+- Token commands only come from your keychain, only files you pick are uploaded, and agents' own arguments can't name secrets. OAuth sign-in pages open only over https, and the recorder answers only localhost.
 - AI runs use your own CLI and login, with file-reading tools only.
+
+<p align="center">
+  <img alt="Review Acme Billing before it uses your secrets: where staging and production send requests, how each signs in, the secret names it reads, and two things worth a second look" src="docs/screenshots/review-secrets.png" width="100%" />
+</p>
 
 More in [SECURITY.md](SECURITY.md).
 
@@ -92,9 +124,11 @@ The app is also a command line — the same code an MCP client runs.
 
 ```sh
 overapi import  examples/acme-orders.openapi.yaml -o ~/overapi/acme-orders
+overapi tools   ~/overapi/acme-orders/overapi.json        # what each environment offers
 overapi check   ~/overapi/acme-orders/overapi.json        # what will trip an agent up
 overapi call    ~/overapi/acme-orders/overapi.json list_orders --env local --args '{"status":"open"}'
 overapi serve   ~/overapi/acme-orders/overapi.json --env local   # what clients run
+overapi install ~/overapi/acme-orders/overapi.json --env local --client codex   # its client config
 overapi test    ~/overapi/acme-orders/overapi.json --junit results.xml
 overapi load    ~/overapi/acme-orders/overapi.json --scenario checkout --users 20 --duration 30
 overapi scan    ~/overapi/acme-orders/overapi.json --fail-on high
@@ -104,7 +138,9 @@ overapi scan    ~/overapi/acme-orders/overapi.json --fail-on high
 
 ## Run it
 
-Requires Node.js 22.12 or newer and macOS.
+Signed, notarized Mac builds go out on [GitHub Releases](https://github.com/overcodelions/overapi/releases) (nightly prereleases for now), and the app keeps itself up to date — Settings chooses automatic or ask-first, stable or beta.
+
+To run it from source you need Node.js 22.12 or newer and macOS.
 
 ```sh
 npm install
@@ -112,7 +148,10 @@ npm run dev              # Vite + Electron
 npm run example:server   # a sample REST API: Acme Orders on :4010, token dev-token
 npm run example:soap     # a sample SOAP service: Acme Inventory on :8089
 npm test
+npm run dist:mac         # build the .dmg and .zip
 ```
+
+The README screenshots are generated from fictional data; see [docs/screenshots](docs/screenshots/README.md) to regenerate them.
 
 | Folder | |
 |---|---|
