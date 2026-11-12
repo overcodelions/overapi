@@ -55,3 +55,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   your team's overgo through overcli.
 - **CLI:** `import`, `tools`, `check`, `call`, `serve`, `install`, `test`,
   `load` and `scan`.
+
+### Security
+- Projects from other people — a clone, or a pull that changes where an API
+  sends its secrets — can't use your secrets until you review a summary of
+  where they'd go and allow them, in the app and for agents. Your own edits
+  keep a project approved; projects with nothing secret aren't asked about.
+- Token commands are read only from the keychain; only files you pick are
+  uploaded; agents' own arguments can't name secrets; OAuth sign-in pages
+  open only over https; the recorder answers only localhost; requests with a
+  client certificate get their own connection.

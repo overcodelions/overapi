@@ -8,7 +8,7 @@ import { borrowSignIn, callTool } from './flow';
 import { buildRequest } from './http';
 import { startRecorder } from './recorder';
 import { heldBack, trustFingerprint } from './trust';
-import { trustSummary, usesSecrets } from '../shared/trust';
+import { projectUsesSecrets, trustSummary, usesSecrets } from '../shared/trust';
 import { serverName } from '../shared/install';
 import type { EnvDef, Project, ToolDef } from '../shared/project';
 
@@ -55,7 +55,7 @@ describe('approval fingerprint', () => {
         ],
       }),
     );
-    expect(s.envs[0]).toMatchObject({ name: 'production', host: 'evil.acme.test', signIn: 'acme-sso’s sign-in' });
+    expect(s.envs[0]).toMatchObject({ name: 'production', host: 'evil.acme.test', signIn: 'acme-sso’s sign-in', borrowed: 'acme-sso' });
     expect(s.warnings).toEqual([
       'production: sends acme-sso’s sign-in to evil.acme.test.',
       'local: runs a command on this Mac for its token — the one you saved in the keychain as ACME_CMD.',
@@ -63,6 +63,37 @@ describe('approval fingerprint', () => {
       'DELETE_orders_id_ deletes, but isn’t marked destructive, so agents aren’t asked to confirm.',
       'POST_search is set to upload a file from this Mac: ~/.ssh/id_rsa.',
     ]);
+  });
+});
+
+describe('which projects need a review', () => {
+  it('only those carrying something to protect', () => {
+    const open: EnvDef = { ...env, auth: { type: 'none' } };
+    expect(projectUsesSecrets(project({ envs: [open] }))).toBe(false);
+    expect(projectUsesSecrets(project())).toBe(true);
+    expect(projectUsesSecrets(project({ envs: [{ ...open, headers: { 'x-key': '${ACME_KEY}' } }] }))).toBe(true);
+    expect(projectUsesSecrets(project({ envs: [open], tools: [{ ...orders, example: { file: '@~/notes.txt' } }] }))).toBe(true);
+  });
+});
+
+describe('what the review leaves out', () => {
+  it('a borrowed sign-in sent to this machine, a POST that searches — and says a shared one once', () => {
+    const via = { type: 'via' as const, api: 'acme-sso' };
+    const s = trustSummary(
+      project({
+        envs: [
+          { ...env, name: 'local', baseUrl: 'http://localhost:4010', auth: via },
+          { ...env, name: 'staging', baseUrl: 'https://api.acme-partner.test', auth: via },
+          { ...env, name: 'production', baseUrl: 'https://api.acme-partner.test/v2', auth: via },
+        ],
+        tools: [tool('POST /orders/filter', 'POST', '/orders/filter'), tool('PUT /orders/{id}', 'PUT', '/orders/{id}')],
+      }),
+    );
+    expect(s.warnings).toEqual([
+      'staging and production: send acme-sso’s sign-in to api.acme-partner.test.',
+      'PUT_orders_id_ (PUT /orders/{id}) can change data but is marked read-only, so agents get it even where writes are off.',
+    ]);
+    expect(s.envs.map((e) => e.signIn)).toEqual(['acme-sso’s sign-in', 'acme-sso’s sign-in', 'acme-sso’s sign-in']);
   });
 });
 

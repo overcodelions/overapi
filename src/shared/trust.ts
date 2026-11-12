@@ -39,6 +39,9 @@ export function trustSurface(p: Project) {
 /// query, mutation or subscription: what a GraphQL request really does.
 const graphqlKind = (q?: string) => /^\s*(mutation|subscription)\b/.exec(q ?? '')?.[1] ?? 'query';
 
+const LOOPBACK = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i;
+const SEARCHY = /search|filter|query|find|lookup|preview|evaluate|check|validate|count|report|export|resolve/i;
+
 const host = (u: string) => {
   try {
     return new URL(u).host || u;
@@ -59,28 +62,29 @@ function authSecrets(a: AuthSpec): string[] {
 function signIn(a: AuthSpec, p: Project): string {
   switch (a.type) {
     case 'none':
-      return 'no sign-in';
+      return 'No sign-in';
     case 'bearer':
-      return 'a bearer token';
+      return 'A bearer token';
     case 'apiKey':
-      return `an API key in the ${a.in} ${a.name}`;
+      return `An API key in the ${a.in} ${a.name}`;
     case 'basic':
-      return 'a user and password';
+      return 'A user and password';
     case 'wsse':
-      return 'a WS-Security user and password';
+      return 'A WS-Security user and password';
     case 'login':
-      return `logs in with ${p.tools.find((t) => t.id === a.toolId)?.name ?? 'one of its requests'}`;
+      return `Logs in with ${p.tools.find((t) => t.id === a.toolId)?.name ?? 'one of its requests'}`;
     case 'via':
       return `${a.api}’s sign-in`;
     case 'oauth2':
-      return `OAuth 2 from ${host(a.tokenUrl)}`;
+      return a.tokenUrl ? `OAuth 2 from ${host(a.tokenUrl)}` : 'OAuth 2, not set up yet';
     case 'command':
-      return 'a token printed by a command on this Mac';
+      return 'A token printed by a command on this Mac';
   }
 }
 
 export interface TrustSummary {
-  envs: { name: string; host: string; signIn: string; secrets: string[] }[];
+  /// `borrowed`: the API whose sign-in it uses, when it borrows one.
+  envs: { name: string; host: string; signIn: string; secrets: string[]; borrowed?: string }[];
   /// What deserves a second look: borrowed sign-ins, commands, files,
   /// certificates, and requests labelled safer than they are.
   warnings: string[];
@@ -93,18 +97,33 @@ export function trustSummary(p: Project): TrustSummary {
     host: host(e.baseUrl),
     signIn: signIn(e.auth, p),
     secrets: [...new Set([...authSecrets(e.auth), ...refs(e.headers), ...toolSecrets, ...(e.tls?.passphraseVar ? [e.tls.passphraseVar] : [])])],
+    borrowed: e.auth.type === 'via' ? e.auth.api : undefined,
   }));
   const warnings: string[] = [];
+  // A borrowed sign-in going off this machine — once per API and host, however
+  // many environments send it there. To localhost it's your own machine.
+  const borrowed = new Map<string, string[]>();
+  for (const e of p.envs)
+    if (e.auth.type === 'via' && !LOOPBACK.test(host(e.baseUrl))) borrowed.set(`${e.auth.api}\u0000${host(e.baseUrl)}`, [...(borrowed.get(`${e.auth.api}\u0000${host(e.baseUrl)}`) ?? []), e.name]);
+  for (const [key, names] of borrowed) {
+    const [api, to] = key.split('\u0000');
+    warnings.push(`${names.join(' and ')}: send${names.length === 1 ? 's' : ''} ${api}’s sign-in to ${to}.`);
+  }
   for (const e of p.envs) {
     const a = e.auth;
-    if (a.type === 'via') warnings.push(`${e.name}: sends ${a.api}’s sign-in to ${host(e.baseUrl)}.`);
     if (a.type === 'command') warnings.push(`${e.name}: runs a command on this Mac for its token — the one you saved in the keychain as ${a.commandVar}.`);
     if (a.type === 'oauth2' && a.authUrl && !/^https:\/\//i.test(a.authUrl)) warnings.push(`${e.name}: its sign-in page isn’t https (${a.authUrl}).`);
     const files = [e.tls?.certFile, e.tls?.keyFile, e.tls?.pfxFile].filter(Boolean);
     if (files.length) warnings.push(`${e.name}: presents a client certificate from ${files.join(', ')}.`);
   }
   for (const t of p.tools) {
-    const reads = t.method === 'GET' || t.method === 'HEAD' || t.method === 'OPTIONS' || (t.bodyMode === 'graphql' && graphqlKind(t.graphql?.query) === 'query');
+    // POST is often a search or a filter: only flag one that doesn't say so.
+    const reads =
+      t.method === 'GET' ||
+      t.method === 'HEAD' ||
+      t.method === 'OPTIONS' ||
+      (t.bodyMode === 'graphql' && graphqlKind(t.graphql?.query) === 'query') ||
+      (t.method === 'POST' && SEARCHY.test(`${t.name} ${t.path}`));
     if (t.enabled && t.safety === 'read' && !reads) warnings.push(`${t.name} (${t.method} ${t.path}) can change data but is marked read-only, so agents get it even where writes are off.`);
     if (t.enabled && t.method === 'DELETE' && t.safety !== 'destructive') warnings.push(`${t.name} deletes, but isn’t marked destructive, so agents aren’t asked to confirm.`);
     for (const f of fileArgs(t.example)) warnings.push(`${t.name} is set to upload a file from this Mac: ${f.slice(1).trim()}.`);
@@ -118,5 +137,15 @@ export function usesSecrets(env: EnvDef, tool: ToolDef): boolean {
   const auth = tool.auth ?? env.auth;
   return (
     auth.type !== 'none' || !!env.browserSession || !!env.tls || refs(env.headers).length > 0 || refs(tool.headers).length > 0 || exampleSecrets(tool).length > 0 || (tool.before ?? []).length > 0
+  );
+}
+
+/// Whether a project carries anything to protect: a sign-in, a ${SECRET},
+/// a browser session, a client certificate, or a file argument. One with
+/// none needs no review — there's nothing to send anywhere.
+export function projectUsesSecrets(p: Project): boolean {
+  return (
+    p.envs.some((e) => e.auth.type !== 'none' || !!e.browserSession || !!e.tls || refs(e.headers).length > 0) ||
+    p.tools.some((t) => (t.auth && t.auth.type !== 'none') || refs(t.headers).length > 0 || exampleSecrets(t).length > 0 || fileArgs(t.example).length > 0)
   );
 }

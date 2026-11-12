@@ -124,10 +124,16 @@ function startApp(): void {
     const st = await import('./appState');
     const secrets = await import('./secrets');
     const { trustFingerprint, heldBack } = await import('../core/trust');
-    const { trustSummary } = await import('../shared/trust');
+    const { trustSummary, projectUsesSecrets } = await import('../shared/trust');
     const { withKeychain } = await import('../core/vars');
+    /// OVERAPI_REVIEW=1: every project shows its review, as if it were new —
+    /// to see the screen without copying a project. Approvals on file are
+    /// left alone; Allow clears a project for this run only.
+    const reviewAll = process.env.OVERAPI_REVIEW === '1';
+    const allowedThisRun = new Set<string>();
     /// Why a project's secrets are held back, if it isn't approved as it is.
-    const blockedFor = (p: string, project: Project) => (st.trustOf(p) === trustFingerprint(project) ? undefined : heldBack(project.title));
+    const blockedFor = (p: string, project: Project) =>
+      (reviewAll ? allowedThisRun.has(p) : st.trustOf(p) === trustFingerprint(project)) ? undefined : heldBack(project.title);
     /// Saves a project from the app. One that was approved (or is new)
     /// stays approved through the person's own edits; one waiting for
     /// review keeps waiting — editing it here doesn't approve it.
@@ -157,8 +163,12 @@ function startApp(): void {
     }
     /// Files the person picked in this session — the only ones Send uploads.
     const pickedFiles = new Set<string>();
-    handle('trust:status', (p, project) => ({ trusted: !blockedFor(p, project), summary: trustSummary(project) }));
-    handle('trust:allow', (p, project) => st.trustProject(p, trustFingerprint(project)));
+    // Nothing secret in it: nothing to review.
+    handle('trust:status', (p, project) => ({ trusted: !projectUsesSecrets(project) || !blockedFor(p, project), summary: trustSummary(project) }));
+    handle('trust:allow', (p, project) => {
+      if (reviewAll) allowedThisRun.add(p);
+      else st.trustProject(p, trustFingerprint(project));
+    });
     const { detectTools } = await import('../core/ai');
     const { discover, cancelDiscovery } = await import('./discovery');
     const overcli = await import('./overcli');
