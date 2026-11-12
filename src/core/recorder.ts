@@ -45,6 +45,13 @@ export async function startRecorder(opts: { target: string; port?: number; onCal
   const doFetch = opts.fetchImpl ?? localFetch;
 
   const server = http.createServer(async (req, res) => {
+    // Only this machine's own requests: a web page that points its domain
+    // at 127.0.0.1 (DNS rebinding) sends its own Host, and a path that
+    // doesn't start with / could aim the forward somewhere else.
+    if (!/^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/i.test(String(req.headers.host ?? '')) || !(req.url ?? '/').startsWith('/')) {
+      res.writeHead(421, { 'content-type': 'text/plain; charset=utf-8' }).end('overapi’s recorder only answers requests to localhost.');
+      return;
+    }
     const started = Date.now();
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);

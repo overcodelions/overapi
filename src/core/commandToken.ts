@@ -3,13 +3,14 @@
 // SSO tool. One way in to every provider that has a CLI, without overapi
 // knowing each one.
 //
-// The command itself is a secret-like value on this Mac (keychain, .env or
-// the shell's environment) — the project only names it. Opening someone
-// else's project never runs a command you didn't save.
+// The command itself is read from this Mac's keychain only — never the
+// environment or a .env, which a shared project can bring with it. The
+// project only names it, so opening someone else's project never runs a
+// command you didn't save yourself.
 
 import { execFile } from 'node:child_process';
 import type { AuthSpec, EnvDef } from '../shared/project';
-import type { VarSource } from './vars';
+import type { VarSource, Vars } from './vars';
 
 export type CommandAuth = Extract<AuthSpec, { type: 'command' }>;
 export type RunCommand = (command: string, timeoutMs: number) => Promise<string>;
@@ -56,6 +57,8 @@ export function tokenFrom(out: string): string {
 
 export interface CommandDeps {
   vars: VarSource;
+  /// The keychain alone; else `vars.keychain` (withKeychain).
+  keychain?: VarSource;
   runtime: Record<string, string>;
   now?: () => number;
   timeoutMs?: number;
@@ -69,8 +72,9 @@ export async function commandToken(a: CommandAuth, env: EnvDef, deps: CommandDep
   const kept = deps.runtime[commandKey(env.name)];
   const at = Number(deps.runtime[commandAtKey(env.name)] || 0);
   if (!force && kept && now - at < (a.refreshMinutes ?? 15) * 60_000) return kept;
-  const command = deps.vars(a.commandVar);
-  if (!command?.trim()) throw new Error(`The token command (${a.commandVar}) isn't set on this Mac. Add it under Environments → Sign-in.`);
+  const command = (deps.keychain ?? (deps.vars as Vars).keychain)?.(a.commandVar);
+  if (!command?.trim())
+    throw new Error(`The token command (${a.commandVar}) isn't saved in this Mac's keychain. Save it under Environments → Sign-in — a command is only ever read from the keychain.`);
   let out: string;
   try {
     out = await (deps.run ?? runShell)(command, deps.timeoutMs ?? 30_000);

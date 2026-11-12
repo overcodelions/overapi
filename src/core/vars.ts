@@ -49,3 +49,13 @@ export function varSource(projectPath?: string, env: NodeJS.ProcessEnv = process
   const file = projectPath ? dotenvBeside(projectPath) : {};
   return (name) => real(env[name]) ?? real(file[name]);
 }
+
+/// Secrets from the keychain first, then the environment and .env — with
+/// the keychain alone kept apart, for what may only come from there (a
+/// token command: a .env can be committed by whoever wrote the project).
+export type Vars = VarSource & { keychain?: VarSource };
+export function withKeychain(keychain: VarSource | undefined, local: VarSource): Vars {
+  const f = ((name: string) => keychain?.(name) ?? local(name)) as Vars;
+  f.keychain = keychain;
+  return f;
+}

@@ -26,8 +26,9 @@ export interface Snippet {
 }
 
 export function serverName(project: Project, env: EnvDef): string {
-  const base = project.name || 'api';
-  return env.name === 'default' ? base : `${base}-${env.name}`.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  // Always cleaned: it's passed to `claude mcp add`, where "--x" would be a flag.
+  const name = env.name === 'default' ? project.name || 'api' : `${project.name || 'api'}-${env.name}`;
+  return name.replace(/[^a-z0-9-]/gi, '-').replace(/^-+/, '').toLowerCase() || 'api';
 }
 
 export function serveArgs(cmd: ServeCommand, projectPath: string, env: EnvDef): string[] {

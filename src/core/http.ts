@@ -44,10 +44,13 @@ const home = (p: string) => (p.startsWith('~/') ? path.join(os.homedir(), p.slic
 /// A file argument as a part. `@/path` reads that file — for the person
 /// only: an agent pointing overapi at files on this machine would be a way
 /// to send them anywhere. Agents send `{ base64, filename }`, or text.
-function fileFrom(v: unknown, name: string, paths: boolean): Part['file'] {
+function fileFrom(v: unknown, name: string, paths: FileRule, defaulted: boolean): Part['file'] {
   if (typeof v === 'string' && v.startsWith('@')) {
-    if (!paths) throw new ArgumentError(`${name} is a file. Send its content as { "base64": "…", "filename": "…" } — overapi doesn't read files from this machine for agents.`);
     const file = home(v.slice(1).trim());
+    if (!paths) throw new ArgumentError(`${name} is a file. Send its content as { "base64": "…", "filename": "…" } — overapi doesn't read files from this machine for agents.`);
+    // A path the project brought (a saved value, a default) isn't one the
+    // person chose: they pick it again.
+    if (defaulted || (typeof paths === 'function' && !paths(file))) throw new ArgumentError(`Choose the file for ${name} again — overapi only sends files you picked yourself.`);
     return { filename: path.basename(file), path: file };
   }
   if (v && typeof v === 'object' && !Array.isArray(v)) {
@@ -71,21 +74,41 @@ export const viaKey = (env: string) => `__via:${env}`;
 
 /// `runtime`: values kept from earlier responses ({{token}} after a login),
 /// filled into the URL, headers and string arguments.
+/// Which `@/path` file arguments may be read: none (an agent's call), the
+/// ones the person picked (a function), or any (tests, the CLI).
+export type FileRule = boolean | ((path: string) => boolean) | undefined;
+
 /// `files`: file arguments may name a path on this machine (`@/path`) —
-/// the app's Send, never an agent's call.
-export function buildRequest(tool: ToolDef, env: EnvDef, rawArgs: Record<string, unknown>, vars: VarSource, runtime?: Record<string, string>, opts: { files?: boolean } = {}): BuiltRequest {
+/// the app's Send, never an agent's call. `argSecrets: false`: ${SECRET}
+/// in the arguments stays as written — an agent's own arguments, which
+/// could otherwise copy any secret into what it sends.
+export function buildRequest(
+  tool: ToolDef,
+  env: EnvDef,
+  rawArgs: Record<string, unknown>,
+  vars: VarSource,
+  runtime?: Record<string, string>,
+  opts: { files?: FileRule; argSecrets?: boolean } = {},
+): BuiltRequest {
   const secrets: string[] = [];
   // String values may hold {{kept}} values and ${SECRETS} (a login's
   // password) — filled here, and the secrets scrubbed from what is shown.
   const fillArg = (v: string) =>
-    fillVars(v, env, runtime).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
-      const value = vars(name) ?? '';
-      if (value) secrets.push(value);
-      return value;
-    });
+    opts.argSecrets === false
+      ? fillVars(v, env, runtime)
+      : fillVars(v, env, runtime).replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_, name: string) => {
+          const value = vars(name) ?? '';
+          if (value) secrets.push(value);
+          return value;
+        });
   const args: Record<string, unknown> = Object.fromEntries(Object.entries(rawArgs).map(([k, v]) => [k, typeof v === 'string' && (v.includes('{{') || v.includes('${')) ? fillArg(v) : v]));
   // An argument left out takes its default (a shared value moved to the environment).
-  for (const p of tool.params) if ((args[p.name] === undefined || args[p.name] === '') && p.schema.default !== undefined) args[p.name] = p.schema.default;
+  const defaulted = new Set<string>();
+  for (const p of tool.params)
+    if ((args[p.name] === undefined || args[p.name] === '') && p.schema.default !== undefined) {
+      args[p.name] = p.schema.default;
+      defaulted.add(p.name);
+    }
   const missing = tool.params.filter((p) => p.required && (args[p.name] === undefined || args[p.name] === null || args[p.name] === ''));
   if (missing.length) throw new ArgumentError(`Missing required argument${missing.length === 1 ? '' : 's'}: ${missing.map((p) => p.name).join(', ')}.`);
 
@@ -221,7 +244,7 @@ export function buildRequest(tool: ToolDef, env: EnvDef, rawArgs: Record<string,
     for (const p of bodyParams) {
       const v = args[p.name];
       if (v === undefined || v === null || v === '') continue;
-      if (isFileParam(p)) parts.push({ name: p.name, file: fileFrom(v, p.name, !!opts.files) });
+      if (isFileParam(p)) parts.push({ name: p.name, file: fileFrom(v, p.name, opts.files, defaulted.has(p.name)) });
       else if (Array.isArray(v)) for (const item of v) parts.push({ name: p.name, value: scalar(item) });
       else parts.push({ name: p.name, value: scalar(v) });
     }

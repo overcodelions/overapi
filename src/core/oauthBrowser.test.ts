@@ -68,17 +68,33 @@ describe('signInWithBrowser', () => {
     expect(Object.fromEntries(p.forms[0])).toMatchObject({ grant_type: 'authorization_code', code: 'code-123', client_id: 'acme-client', redirect_uri: `http://127.0.0.1:${port}/callback` });
   });
 
-  it('refuses an answer meant for another sign-in', async () => {
+  it('ignores an answer meant for another sign-in, and keeps waiting for the real one', async () => {
     const port = await freePort();
-    const p = provider(() => ({ code: 'code-123', state: 'someone-elses' }));
-    await expect(signInWithBrowser(auth(port), env(auth(port)), { vars, runtime: {}, fetchImpl: p.fetchImpl, open: p.open })).rejects.toThrow('The answer didn’t match this sign-in.');
-    expect(p.forms).toHaveLength(0);
+    const p = provider((u) => ({ code: 'code-123', state: u.searchParams.get('state')! }));
+    const statuses: number[] = [];
+    // A page tries to end the sign-in first; then the provider sends the browser back.
+    const open = (url: string) =>
+      void (async () => {
+        statuses.push((await fetch(`http://127.0.0.1:${port}/callback?error=access_denied&state=someone-elses`)).status);
+        p.open(url);
+      })();
+    const runtime: Record<string, string> = {};
+    await signInWithBrowser(auth(port), env(auth(port)), { vars, runtime, fetchImpl: p.fetchImpl, open });
+    expect(statuses).toEqual([400]);
+    expect(runtime[oauthKey('staging')]).toBe('tok');
   });
 
   it('passes on what the provider said when the person says no', async () => {
     const port = await freePort();
-    const p = provider(() => ({ error: 'access_denied', error_description: 'The user declined' }));
+    const p = provider((u) => ({ error: 'access_denied', error_description: 'The user declined', state: u.searchParams.get('state')! }));
     await expect(signInWithBrowser(auth(port), env(auth(port)), { vars, runtime: {}, fetchImpl: p.fetchImpl, open: p.open })).rejects.toThrow('The provider said: The user declined.');
+  });
+
+  it('won’t open a sign-in page that isn’t https', async () => {
+    let opened = false;
+    const bad = { ...auth(1), authUrl: 'file:///Users/acme/Downloads/Helper.app' };
+    await expect(signInWithBrowser(bad, env(bad), { vars, runtime: {}, open: () => (opened = true) })).rejects.toThrow('the sign-in page must be an https address, not file:.');
+    expect(opened).toBe(false);
   });
 
   it('needs the client id before opening anything', async () => {

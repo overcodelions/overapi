@@ -81,6 +81,7 @@ Services that belong together — the APIs of one product — grouped, with **on
 - Tools are read, write or destructive. Write tools stay hidden until an environment allows writes; destructive ones also need `confirm: true` and carry `destructiveHint`, so clients ask you first.
 - Secrets live in the keychain, never in a project file, and are scrubbed from everything shown or returned. The renderer can set a secret but never read one.
 - Your browser sign-ins are yours: they never publish.
+- A project from someone else — a clone, a pull that changed it — can't use your secrets until you've reviewed where they'd go and allowed it. Token commands only come from your keychain, and only files you pick are uploaded.
 - AI runs use your own CLI and login, with file-reading tools only.
 
 More in [SECURITY.md](SECURITY.md).

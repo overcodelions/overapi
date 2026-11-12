@@ -1,4 +1,5 @@
 import { PublishSheet } from './PublishSheet';
+import { TrustBanner } from './TrustBanner';
 import { envKind } from '@shared/project';
 import { AgentReadySheet } from './AgentReadySheet';
 import { useEffect, useState } from 'react';
@@ -51,7 +52,9 @@ export function App(): JSX.Element {
       <TitleBar />
       <div className="flex min-h-0 flex-1">
         <Sidebar />
-        <main className="flex min-w-0 flex-1 flex-col bg-canvas">{recording ? <RecorderView /> : system ? <SystemView /> : project ? <ProjectBody /> : loadError ? <LoadError /> : <Welcome />}</main>
+        <main className="flex min-w-0 flex-1 flex-col bg-canvas">
+          {project && !recording && !system && <TrustBanner />}
+          {recording ? <RecorderView /> : system ? <SystemView /> : project ? <ProjectBody /> : loadError ? <LoadError /> : <Welcome />}</main>
       </div>
       {sheet?.kind === 'new' && <NewApiSheet key={`${sheet.mode}:${sheet.prefill ?? ''}`} mode={sheet.mode} prefill={sheet.prefill} />}
       {sheet?.kind === 'settings' && <SettingsSheet />}

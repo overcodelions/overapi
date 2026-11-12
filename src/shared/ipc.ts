@@ -193,6 +193,10 @@ export interface IPCInvokeMap {
   'settings:get': () => Settings;
   'settings:set': (patch: Partial<Settings>) => Settings;
   'settings:pickDir': () => string | null;
+  /// Whether a project is approved as it is, and what it would do with your secrets.
+  'trust:status': (path: string, project: Project) => { trusted: boolean; summary: import('./trust').TrustSummary };
+  /// Approve a project as it is now.
+  'trust:allow': (path: string, project: Project) => void;
   /// A file on this Mac: a multipart upload, a client certificate.
   'dialog:pickFile': (title?: string) => string | null;
   /// OAuth authorization code: signs in in the browser (PKCE), keeps the

@@ -39,8 +39,9 @@ if (SERVE) {
   console.warn = toStderr;
   app.dock?.hide();
   void app.whenReady().then(async () => {
-    const [{ run }, { keychainSource }] = await Promise.all([import('../cli/index'), import('./secrets')]);
-    await run(process.argv.slice(serveAt), serveCommand(), keychainSource);
+    const [{ run }, { keychainSource }, st, { trustFingerprint }] = await Promise.all([import('../cli/index'), import('./secrets'), import('./appState'), import('../core/trust')]);
+    // Only what the app has approved gets its secrets.
+    await run(process.argv.slice(serveAt), serveCommand(), keychainSource, (p, project) => st.trustOf(p) === trustFingerprint(project));
   });
 } else {
   startApp();
@@ -109,13 +110,65 @@ function startApp(): void {
   const emit = (e: MainEvent) => win?.webContents.send('main:event', e);
 
   function handle<K extends keyof IPCInvokeMap>(channel: K, fn: (...args: Parameters<IPCInvokeMap[K]>) => ReturnType<IPCInvokeMap[K]> | Promise<ReturnType<IPCInvokeMap[K]>>): void {
-    ipcMain.handle(channel, (_e, ...args) => fn(...(args as Parameters<IPCInvokeMap[K]>)));
+    ipcMain.handle(channel, (e, ...args) => {
+      // Only the app's own window: never a page a recording window loaded.
+      const from = e.senderFrame?.url ?? '';
+      const ours = DEV_URL ? from.startsWith(DEV_URL) : from.startsWith('file://') && from.includes('/renderer/index.html');
+      if (!ours) throw new Error(`overapi refused ${channel}: not from the app’s window.`);
+      return fn(...(args as Parameters<IPCInvokeMap[K]>));
+    });
   }
 
   async function registerIpc(): Promise<void> {
     const core = await import('../core/index');
     const st = await import('./appState');
     const secrets = await import('./secrets');
+    const { trustFingerprint, heldBack } = await import('../core/trust');
+    const { trustSummary, projectUsesSecrets } = await import('../shared/trust');
+    const { withKeychain } = await import('../core/vars');
+    /// OVERAPI_REVIEW=1: every project shows its review, as if it were new —
+    /// to see the screen without copying a project. Approvals on file are
+    /// left alone; Allow clears a project for this run only.
+    const reviewAll = process.env.OVERAPI_REVIEW === '1';
+    const allowedThisRun = new Set<string>();
+    /// Why a project's secrets are held back, if it isn't approved as it is.
+    const blockedFor = (p: string, project: Project) =>
+      (reviewAll ? allowedThisRun.has(p) : st.trustOf(p) === trustFingerprint(project)) ? undefined : heldBack(project.title);
+    /// Saves a project from the app. One that was approved (or is new)
+    /// stays approved through the person's own edits; one waiting for
+    /// review keeps waiting — editing it here doesn't approve it.
+    const saveFromApp = (file: string, project: Project) => {
+      let approved = true;
+      if (fs.existsSync(file)) {
+        try {
+          approved = st.trustOf(file) === trustFingerprint(core.readProject(file));
+        } catch {
+          approved = false;
+        }
+      }
+      core.writeProject(file, project);
+      if (approved) st.trustProject(file, trustFingerprint(project));
+    };
+    // The first run with approvals: projects already here are the person's own.
+    if (!st.hasTrustStore()) {
+      const map: Record<string, string> = {};
+      for (const p of st.listProjects()) {
+        try {
+          map[p] = trustFingerprint(core.readProject(p));
+        } catch {
+          // Unreadable now: it's reviewed when it opens.
+        }
+      }
+      st.seedTrust(map);
+    }
+    /// Files the person picked in this session — the only ones Send uploads.
+    const pickedFiles = new Set<string>();
+    // Nothing secret in it: nothing to review.
+    handle('trust:status', (p, project) => ({ trusted: !projectUsesSecrets(project) || !blockedFor(p, project), summary: trustSummary(project) }));
+    handle('trust:allow', (p, project) => {
+      if (reviewAll) allowedThisRun.add(p);
+      else st.trustProject(p, trustFingerprint(project));
+    });
     const { detectTools } = await import('../core/ai');
     const { discover, cancelDiscovery } = await import('./discovery');
     const overcli = await import('./overcli');
@@ -136,16 +189,12 @@ function startApp(): void {
     };
     const create = (project: Project) => {
       const file = homeFor(project.name);
-      core.writeProject(file, project);
+      saveFromApp(file, project);
       fs.writeFileSync(path.join(path.dirname(file), '.gitignore'), '.env\n');
       st.rememberProject(file);
       return file;
     };
-    const vars = (p: string) => {
-      const kc = secrets.keychainSource(p);
-      const local = core.varSource(p);
-      return (name: string) => kc(name) ?? local(name);
-    };
+    const vars = (p: string) => withKeychain(secrets.keychainSource(p), core.varSource(p));
 
     // Probing the CLIs spawns two processes; a slow shell or a wedged CLI
     // must never hold the window on its splash. Start it now, answer with
@@ -175,11 +224,15 @@ function startApp(): void {
     });
     handle('dialog:pickFile', async (title) => {
       const r = await dialog.showOpenDialog(win!, { title: title ?? 'Choose a file', properties: ['openFile'] });
-      return r.canceled ? null : (r.filePaths[0] ?? null);
+      const f = r.canceled ? null : (r.filePaths[0] ?? null);
+      if (f) pickedFiles.add(f);
+      return f;
     });
     handle('auth:tryCommand', async (p, project, envName) => {
       const env = project.envs.find((e) => e.name === envName);
       if (!env || env.auth.type !== 'command') return { ok: false, error: 'That environment doesn’t sign in with a command.' };
+      const held = blockedFor(p, project);
+      if (held) return { ok: false, error: held };
       const rt = runtimeValues(p);
       try {
         const token = await commandToken(env.auth, env, { vars: vars(p), runtime: rt }, true);
@@ -199,6 +252,8 @@ function startApp(): void {
       const env = project.envs.find((e) => e.name === envName);
       const a = env?.auth;
       if (!env || a?.type !== 'oauth2') return { ok: false, error: 'That environment doesn’t sign in with OAuth.' };
+      const held = blockedFor(p, project);
+      if (held) return { ok: false, error: held };
       const rt = runtimeValues(p);
       try {
         await signInWithBrowser(a, env, {
@@ -206,7 +261,9 @@ function startApp(): void {
           runtime: rt,
           timeoutMs: st.getSettings().timeoutSec * 1000,
           saveSecret: (n, val) => void secrets.setSecret(p, n, val),
-          open: (url) => void shell.openExternal(url),
+          open: (url) => {
+            if (oauth.isBrowserSafe(url)) void shell.openExternal(url);
+          },
         });
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -337,7 +394,7 @@ function startApp(): void {
           else delete next.browserSession;
         }
         project.envs = at >= 0 ? project.envs.map((e, i) => (i === at ? next : e)) : [...project.envs, next];
-        core.writeProject(p, project);
+        saveFromApp(p, project);
         return { ok: true };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -365,7 +422,7 @@ function startApp(): void {
       try {
         const project = core.readProject(p);
         project.tools = project.tools.map((t) => (toolIds.includes(t.id) ? { ...t, enabled } : t));
-        core.writeProject(p, project);
+        saveFromApp(p, project);
         return { ok: true };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -379,7 +436,7 @@ function startApp(): void {
             ? t
             : { ...t, params: t.params.map((x) => (x.name !== param ? x : { ...x, description: x.description?.includes(text) ? x.description : [x.description?.trim(), text].filter(Boolean).join(' ') })) },
         );
-        core.writeProject(p, project);
+        saveFromApp(p, project);
         return { ok: true };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -449,12 +506,12 @@ function startApp(): void {
         const tidy = tidyNames(cleaned.project);
         cleaned.project = tidy.project;
         if (tidy.renamed.length && !cleaned.removed.length && !cleaned.repaired.length) {
-          core.writeProject(p, cleaned.project);
+          saveFromApp(p, cleaned.project);
           const r = tidy.renamed;
           return { ok: true, project: cleaned.project, note: `Renamed ${r.length} request${r.length === 1 ? '' : 's'} so the names say how they differ: ${r.slice(0, 3).map(([a, b]) => `${a} → ${b}`).join(', ')}${r.length > 3 ? '…' : ''}.` };
         }
         if (cleaned.removed.length || cleaned.repaired.length) {
-          core.writeProject(p, cleaned.project);
+          saveFromApp(p, cleaned.project);
           const n = cleaned.removed.length;
           const m = cleaned.repaired.length;
           const parts = [
@@ -470,7 +527,7 @@ function startApp(): void {
     });
     handle('projects:save', (p, project: Project) => {
       try {
-        core.writeProject(p, project);
+        saveFromApp(p, project);
         return { ok: true };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -533,7 +590,7 @@ function startApp(): void {
             if (project.name !== api) continue;
             let rt = touched.get(p);
             if (!rt) touched.set(p, (rt = runtimeValues(p)));
-            return { project, vars: vars(p), runtime: rt };
+            return { project, vars: vars(p), runtime: rt, blocked: blockedFor(p, project) };
           } catch {
             // Gone or broken: look further.
           }
@@ -546,6 +603,8 @@ function startApp(): void {
       const env = project.envs.find((e) => e.name === envName);
       const auth = env?.auth;
       if (!env || auth?.type !== 'via') return { ok: false, error: 'This environment isn’t signed in by another API.' };
+      const held = blockedFor(p, project);
+      if (held) return { ok: false, error: held };
       const { peer, flush } = peers();
       try {
         const b = await core.borrowSignIn(auth, env.name, { vars: vars(p), runtime: runtimeValues(p), peer, timeoutMs: st.getSettings().timeoutSec * 1000 });
@@ -566,6 +625,8 @@ function startApp(): void {
       const env = project.envs.find((e) => e.name === envName);
       const auth = env?.auth;
       if (!env || auth?.type !== 'login') return { ok: false, error: 'This environment doesn’t sign in with a request.' };
+      const held = blockedFor(p, project);
+      if (held) return { ok: false, error: held };
       const rt = runtimeValues(p);
       try {
         const { token } = await core.signIn(project, env, auth, { vars: vars(p), runtime: rt, timeoutMs: st.getSettings().timeoutSec * 1000 });
@@ -598,8 +659,9 @@ function startApp(): void {
             runtime: rt,
             peer,
             timeoutMs: st.getSettings().timeoutSec * 1000,
-            // The person's own Send: a file argument may name a file here.
-            files: true,
+            // The person's own Send: a file argument may name a file they picked.
+            files: (f) => pickedFiles.has(f),
+            blocked: () => blockedFor(req.path, req.project),
             saveSecret: (n, v) => void secrets.setSecret(req.path, n, v),
           })
           .finally(flush);
@@ -677,7 +739,7 @@ function startApp(): void {
         if (!tool || !env) return { ok: false, error: `${project.title} has no ${envName} environment, or that request is gone.` };
         const rt = runtimeValues(p);
         const { peer, flush } = peers();
-        const { result: r } = await core.callTool(project, tool, env, tool.example ?? {}, { vars: vars(p), runtime: rt, peer, timeoutMs: st.getSettings().timeoutSec * 1000 }).finally(flush);
+        const { result: r } = await core.callTool(project, tool, env, tool.example ?? {}, { vars: vars(p), runtime: rt, peer, timeoutMs: st.getSettings().timeoutSec * 1000, blocked: () => blockedFor(p, project) }).finally(flush);
         syncRuntime(p, rt, tool.name);
         st.addHistory(p, { id: randomUUID(), at: new Date().toISOString(), toolId: tool.id, toolName: tool.name, env: env.name, args: tool.example ?? {}, method: tool.method, ok: r.ok, status: r.status, ms: r.durationMs, url: r.request.url });
         if (r.ok && r.json !== undefined) st.recordSeen(p, env.name, tool.id, extractSeen(r.json));
@@ -765,10 +827,18 @@ function startApp(): void {
           const first = sysNow();
           if (!first.members.length) return { ok: false, error: 'None of this workspace’s APIs can be read.' };
           title = first.title;
-          srv = await startAskServer({ project: () => first.members[0].project, system: sysNow, envName, vars: vars(p), log: () => undefined, peer: peers().peer });
+          srv = await startAskServer({
+            project: () => first.members[0].project,
+            system: sysNow,
+            envName,
+            vars: vars(p),
+            log: () => undefined,
+            peer: peers().peer,
+            blocked: (key, proj) => blockedFor(key || p, proj),
+          });
         } else {
           title = core.readProject(p).title;
-          srv = await startAskServer({ project: () => core.readProject(p), envName, vars: vars(p), log: () => undefined, peer: peers().peer });
+          srv = await startAskServer({ project: () => core.readProject(p), envName, vars: vars(p), log: () => undefined, peer: peers().peer, blocked: (key, proj) => blockedFor(key || p, proj) });
         }
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -925,19 +995,19 @@ function startApp(): void {
       if (!clean) return { ok: false, error: 'An API needs a name.' };
       const name = slug(clean) || project.name;
       if (name === project.name) {
-        core.writeProject(p, { ...project, title: clean });
+        saveFromApp(p, { ...project, title: clean });
         return { ok: true, name, moved: [], overgo: false };
       }
       const envs = Object.keys(st.installedFor(p));
       for (const e of envs) await claudeRemove(p, e);
-      core.writeProject(p, { ...project, title: clean, name });
+      saveFromApp(p, { ...project, title: clean, name });
       // APIs it signs in, and systems it signs in for, follow the new name.
       for (const other of st.listProjects()) {
         if (other === p) continue;
         try {
           const o = core.readProject(other);
           if (!o.envs.some((e) => e.auth.type === 'via' && e.auth.api === project.name)) continue;
-          core.writeProject(other, { ...o, envs: o.envs.map((e) => (e.auth.type === 'via' && e.auth.api === project.name ? { ...e, auth: { type: 'via' as const, api: name, path: p } } : e)) });
+          saveFromApp(other, { ...o, envs: o.envs.map((e) => (e.auth.type === 'via' && e.auth.api === project.name ? { ...e, auth: { type: 'via' as const, api: name, path: p } } : e)) });
         } catch {
           // Unreadable: left alone.
         }
@@ -1210,7 +1280,7 @@ function startApp(): void {
         const imported = core.importText(JSON.stringify(callsToHar(calls, env?.baseUrl || recTarget)), 'recording');
         const { mergeRecorded } = await import('../shared/merge');
         const merged = mergeRecorded(project, env?.baseUrl ?? '', imported);
-        if (merged.added || merged.removed) core.writeProject(p, merged.project);
+        if (merged.added || merged.removed) saveFromApp(p, merged.project);
         return { ok: true, added: merged.added, removed: merged.removed };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -1342,6 +1412,7 @@ function startApp(): void {
         const run = await core.runScenario(project, sc, env, {
           vars: vars(p),
           peer,
+          blocked: () => blockedFor(p, project),
           timeoutMs: st.getSettings().timeoutSec * 1000,
           allowWrites,
           until,
@@ -1367,7 +1438,7 @@ function startApp(): void {
       if (loadAbort) return { ok: false, error: 'A load test is already running. Stop it first.' };
       loadAbort = new AbortController();
       try {
-        const result = await core.runLoad(project, sc, env, { vars: vars(p), peer: peers().peer, timeoutMs: st.getSettings().timeoutSec * 1000, signal: loadAbort.signal, onTick: (snapshot) => emit({ type: 'load:tick', scenarioId, snapshot }) }, opts);
+        const result = await core.runLoad(project, sc, env, { vars: vars(p), peer: peers().peer, blocked: () => blockedFor(p, project), timeoutMs: st.getSettings().timeoutSec * 1000, signal: loadAbort.signal, onTick: (snapshot) => emit({ type: 'load:tick', scenarioId, snapshot }) }, opts);
         return { ok: true, result };
       } catch (e) {
         return { ok: false, error: (e as Error).message };
@@ -1449,6 +1520,8 @@ function startApp(): void {
         return renew(peerPath, pe.name, hops + 1);
       }
       if (env.auth.type === 'login') {
+        const held = blockedFor(p, project);
+        if (held) return { ok: false, error: held };
         const rt = runtimeValues(p);
         try {
           await core.signIn(project, env, env.auth, { vars: vars(p), runtime: rt, timeoutMs: st.getSettings().timeoutSec * 1000 });
@@ -1489,7 +1562,7 @@ function startApp(): void {
             ? { ...e, auth: r.headers.Authorization ? { type: 'none' as const } : e.auth, headers: { ...Object.fromEntries(Object.entries(e.headers ?? {}).filter(([, v]) => !isSessionHeader(v))), ...r.headers }, browserSession: { site: r.site, at: r.at, via: r.via } }
             : e,
         );
-        core.writeProject(p, fresh);
+        saveFromApp(p, fresh);
         return { ok: true, renewed: p, title: project.title, note: `Signed in to ${project.title} again — ${r.found.join(', ')}.` };
       }
       return { ok: false, manual: true, error: `${project.title}’s ${envName} uses a ${env.auth.type === 'none' ? 'no sign-in' : 'token or key you set'} — overapi can’t renew it by itself. Update it under Environments.` };
