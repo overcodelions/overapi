@@ -75,7 +75,7 @@ export interface TryResponse {
 }
 
 export interface SeenSuggestions {
-  values: { v: string | number; label?: string; from: string }[];
+  values: { v: string | number; label?: string; row?: import('./seen').SeenRow; from: string }[];
   sources: { path: string; toolId: string; toolName: string; api: string }[];
 }
 
