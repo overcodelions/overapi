@@ -259,7 +259,7 @@ export interface IPCInvokeMap {
   'ai:cancel': () => void;
   /// Ask this API's tools a question through the person's claude (main/ask.ts); steps arrive as 'ask:event'.
   /// `runId`: chosen by the panel, so it knows its run's events from the first one.
-  'agent:ask': (path: string, env: string, question: string, runId: string) => { ok: true } | { ok: false; error: string };
+  'agent:ask': (path: string, env: string, question: string, runId: string, history?: { question: string; answer: string }[]) => { ok: true } | { ok: false; error: string };
   /// Stops one question's run (or all, with no id).
   'agent:stop': (runId?: string) => void;
 

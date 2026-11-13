@@ -810,7 +810,7 @@ function startApp(): void {
     // Ask: a question, answered by claude through this API's own MCP server.
     /// Questions being answered, by run: each panel follows only its own.
     const asking = new Map<string, { stop: () => void }>();
-    handle('agent:ask', async (p, envName, question, runId) => {
+    handle('agent:ask', async (p, envName, question, runId, history) => {
       const bin = claudeBin();
       if (!bin) return { ok: false, error: 'Asking needs the claude CLI (Claude Code). Install it, or use “Call a tool” to try tools by hand.' };
       if (asking.size >= 3) return { ok: false, error: 'Three questions are already being answered — stop one first.' };
@@ -843,7 +843,7 @@ function startApp(): void {
       } catch (e) {
         return { ok: false, error: (e as Error).message };
       }
-      const run = runAsk({ bin, question, title, url: srv.url, token: srv.token, model: st.getSettings().aiModel || undefined, onEvent: (event) => emit({ type: 'ask:event', runId, event }) });
+      const run = runAsk({ bin, question, history, title, url: srv.url, token: srv.token, model: st.getSettings().aiModel || undefined, onEvent: (event) => emit({ type: 'ask:event', runId, event }) });
       asking.set(runId, run);
       void run.done.finally(() => {
         asking.delete(runId);

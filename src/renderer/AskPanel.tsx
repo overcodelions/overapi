@@ -84,10 +84,12 @@ export function AskPanel({ env, target }: { env: string; target?: { path: string
     const text = q.trim();
     if (!text || running) return;
     setQuestion('');
+    // What was asked and answered before, so a follow-up can build on it.
+    const history = turns.filter((t) => t.done?.answer).map((t) => ({ question: t.question, answer: t.done!.answer }));
     setTurns((ts) => [...ts, { question: text, steps: [], startedAt: Date.now() }]);
     const runId = crypto.randomUUID();
     runRef.current = runId;
-    const r = await window.overapi.invoke('agent:ask', path!, env, text, runId);
+    const r = await window.overapi.invoke('agent:ask', path!, env, text, runId, history);
     if (!r.ok) patchLast((t) => ({ ...t, error: r.error }));
   };
   const openTool = (name: string) => {
@@ -272,7 +274,7 @@ export function AskPanel({ env, target }: { env: string; target?: { path: string
           <Icon name="sparkle" size={15} className="shrink-0 text-accent" />
           <input
             className="min-w-0 flex-1 bg-transparent py-1.5 text-[14px] outline-none placeholder:text-ink-faint focus-visible:outline-none"
-            placeholder={turns.length ? 'Ask a follow-up — each question starts fresh' : `Ask ${p.title} something…`}
+            placeholder={turns.length ? 'Ask a follow-up…' : `Ask ${p.title} something…`}
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             disabled={running}
@@ -284,9 +286,16 @@ export function AskPanel({ env, target }: { env: string; target?: { path: string
               Stop
             </button>
           ) : (
-            <button className="btn-primary rounded-xl" disabled={!question.trim()}>
-              Ask
-            </button>
+            <>
+              {turns.length > 0 && (
+                <button type="button" className="shrink-0 rounded-md px-2 py-1 text-[12px] text-ink-faint hover:bg-wash hover:text-ink" title="Forget this conversation and start over" onClick={() => setTurns([])}>
+                  New chat
+                </button>
+              )}
+              <button className="btn-primary rounded-xl" disabled={!question.trim()}>
+                Ask
+              </button>
+            </>
           )}
         </div>
         <p className="mx-auto mt-1.5 w-full max-w-4xl text-center text-[10.5px] text-ink-faint">Read-only · runs through your claude · uses your Claude usage</p>
