@@ -156,3 +156,23 @@ describe('examples for agents', () => {
     expect(props.blank.examples).toBeUndefined();
   });
 });
+
+describe('parameter names an agent can use', () => {
+  it('renames bracketed query params and maps them back on a call', async () => {
+    const p = project(false);
+    p.tools.push({ id: 'GET /notes', name: 'list_notes', description: 'Notes.', enabled: true, safety: 'read', method: 'GET', path: '/notes', bodyMode: 'none', params: [
+      { name: 'type[]', in: 'query', required: false, schema: { type: 'array', items: { type: 'string' } } },
+      { name: 'type', in: 'query', required: false, schema: { type: 'string' } },
+      { name: 'filter[status]', in: 'query', required: true, schema: { type: 'string' } },
+    ] });
+    const client = await connect(p);
+    const { tools } = await client.listTools();
+    const notes = tools.find((t) => t.name === 'list_notes')!;
+    expect(Object.keys(notes.inputSchema.properties!)).toEqual(['type_2', 'type', 'filter_status']);
+    expect(notes.inputSchema.required).toEqual(['filter_status']);
+    for (const t of tools) for (const k of Object.keys(t.inputSchema.properties ?? {})) expect(k).toMatch(/^[a-zA-Z0-9_.-]{1,64}$/);
+    const r = await client.callTool({ name: 'list_notes', arguments: { type_2: ['simple', 'conversation'], filter_status: 'open' } });
+    expect(text(r)).toContain(encodeURIComponent('type[]') + '=simple');
+    expect(text(r)).toContain(encodeURIComponent('filter[status]') + '=open');
+  });
+});
