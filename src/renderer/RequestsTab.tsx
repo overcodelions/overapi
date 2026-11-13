@@ -2200,17 +2200,17 @@ function ParamTable({
     <div className="space-y-5">
       <section>
         <div className="mb-2 flex items-center gap-2.5">
-          <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-ink">Sending</h3>
-          <span className="text-[12px] text-ink-faint">{sending.length ? 'what goes on this request — the same an agent fills in' : `nothing yet — every ${noun} here is optional`}</span>
+          <h3 className="shrink-0 text-[11px] font-semibold uppercase tracking-[0.08em] text-ink">Sending</h3>
+          <span className="min-w-0 truncate text-[12px] text-ink-faint" title={sending.length ? 'what goes on this request — the same an agent fills in' : undefined}>{sending.length ? 'what goes on this request — the same an agent fills in' : `nothing yet — every ${noun} here is optional`}</span>
           <span className="flex-1" />
           {samples.length > 0 && (
-            <div className="relative">
+            <div className="relative shrink-0">
               <button
                 type="button"
                 onClick={() => setPastOpen((o) => !o)}
                 onBlur={() => setTimeout(() => setPastOpen(false), 150)}
                 aria-expanded={pastOpen}
-                className={`inline-flex h-[26px] items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium ${pastOpen ? 'border-accent bg-accent/10 text-ink' : 'border-rule-strong text-ink-muted hover:text-ink'}`}
+                className={`inline-flex h-[26px] items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12px] font-medium ${pastOpen ? 'border-accent bg-accent/10 text-ink' : 'border-rule-strong text-ink-muted hover:text-ink'}`}
               >
                 <Icon name="history" size={12} /> Load a past call <span className="text-ink-faint">{samples.length}</span>
               </button>

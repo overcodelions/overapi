@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useStore } from './store';
-import { readablePath, type Link } from '@shared/chains';
+import { isIdLike, readablePath, type Link } from '@shared/chains';
 import { looksLikeId } from '@shared/seen';
 import type { SeenSuggestions } from '@shared/ipc';
+import type { SeenRow } from '@shared/seen';
 
 // An argument another request gives — a group's id that "list groups"
 // answers with — picked by what it is, not typed as an id. One control
@@ -96,6 +98,38 @@ const Search = () => (
   </svg>
 );
 
+/// "team.shortName" → "Team short name".
+const heading = (k: string) => {
+  const t = k.replace(/\./g, ' ').replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toLowerCase();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+
+/// The fields worth a column: ones most rows have and that tell rows apart.
+/// Whatever the API — the rows decide, not the param.
+function columnsFor(rows: { v: string; row?: SeenRow }[], max = 9): string[] {
+  const withRow = rows.filter((r) => r.row);
+  if (!withRow.length) return [];
+  const seen = new Map<string, { n: number; vals: Set<string>; sameAsId: number }>();
+  for (const r of withRow)
+    for (const [k, v] of Object.entries(r.row!)) {
+      const c = seen.get(k) ?? seen.set(k, { n: 0, vals: new Set(), sameAsId: 0 }).get(k)!;
+      c.n++;
+      c.vals.add(String(v));
+      if (String(v) === r.v) c.sameAsId++;
+    }
+  const keep: string[] = [];
+  const sameAs = (a: string, b: string) => withRow.filter((r) => r.row![a] !== undefined && String(r.row![a]) === String(r.row![b])).length >= withRow.length * 0.8;
+  for (const [k, c] of seen) {
+    if (keep.length >= max) break;
+    if (c.n < Math.max(1, withRow.length * 0.3) || c.sameAsId >= c.n) continue;
+    if (withRow.length > 1 && c.vals.size < 2) continue; // the same on every row
+    if (isIdLike(k.split('.').pop()!)) continue; // other records' ids say little
+    if (keep.some((j) => sameAs(j, k))) continue; // shortName beside name
+    keep.push(k);
+  }
+  return keep;
+}
+
 export function ValuePicker({
   toolId,
   param,
@@ -145,7 +179,11 @@ export function ValuePicker({
   const values = (data?.values ?? []).map((x) => ({
     v: String(x.v),
     label: x.label && !looksLikeId(x.label) ? x.label : undefined,
+    row: x.row,
   }));
+  const columns = useMemo(() => columnsFor(values), [data]);
+  // A column already showing the label needn't repeat it.
+  const cols = columns.filter((k) => !values.every((x) => !x.row || x.label === undefined || x.row[k] === undefined || x.label.includes(String(x.row[k]))));
   const match = current !== undefined ? values.find((x) => x.v === current) : undefined;
   const label = match?.label;
   const source = data?.sources.find((s) => s.toolId === link.from) ?? data?.sources[0];
@@ -160,9 +198,14 @@ export function ValuePicker({
   };
 
   const ql = q.trim().toLowerCase();
-  const shown = values.filter((x) => !ql || x.v.toLowerCase().includes(ql) || x.label?.toLowerCase().includes(ql));
+  const shown = values.filter(
+    (x) => !ql || x.v.toLowerCase().includes(ql) || x.label?.toLowerCase().includes(ql) || (x.row && Object.values(x.row).some((f) => String(f).toLowerCase().includes(ql))),
+  );
   const typed = q.trim() && !values.some((x) => x.v === q.trim()) ? q.trim() : null;
-  const options = [...(typed ? [{ v: typed, label: undefined, typed: true }] : []), ...shown.slice(0, 60).map((x) => ({ ...x, typed: false }))];
+  const options: { v: string; label?: string; row?: SeenRow; typed: boolean }[] = [
+    ...(typed ? [{ v: typed, label: undefined, typed: true }] : []),
+    ...shown.slice(0, 60).map((x) => ({ ...x, typed: false })),
+  ];
   const close = () => {
     setOpen(false);
     setQ('');
@@ -175,24 +218,12 @@ export function ValuePicker({
   const seg = (on: boolean) => `rounded-md px-2.5 py-1 font-medium ${on ? 'bg-surface-elevated text-ink shadow-sm' : 'text-ink-muted hover:text-ink'}`;
 
   return (
-    <div
-      className="relative"
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) close();
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape' && open) {
-          e.stopPropagation();
-          close();
-          trigger.current?.focus();
-        }
-      }}
-    >
+    <div className="relative">
       <button
         ref={trigger}
         type="button"
         autoFocus={autoFocus}
-        aria-haspopup="listbox"
+        aria-haspopup="dialog"
         aria-expanded={open}
         aria-label={`${noun} for ${param}`}
         onClick={() => setOpen((o) => !o)}
@@ -285,105 +316,195 @@ export function ValuePicker({
         )}
       </div>
 
-      {open && (
-        <div className="absolute left-0 right-0 top-[34px] z-30 overflow-hidden rounded-lg border border-rule-strong bg-surface-elevated shadow-xl">
-          <div className="flex items-center gap-2 border-b border-rule px-2.5 py-2 text-ink-faint">
-            <Search />
-            <input
-              autoFocus
-              aria-label={`Find ${a(noun)} ${noun}, or paste an id`}
-              placeholder={`Find ${a(noun)} ${noun}, or paste an id`}
-              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-faint"
-              value={q}
-              onChange={(e) => {
-                setQ(e.target.value);
-                setActive(0);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowDown') {
-                  e.preventDefault();
-                  setActive((i) => Math.min(i + 1, options.length - 1));
-                } else if (e.key === 'ArrowUp') {
-                  e.preventDefault();
-                  setActive((i) => Math.max(i - 1, 0));
-                } else if (e.key === 'Enter' && !e.metaKey && options[active]) {
-                  e.preventDefault();
-                  choose(options[active].v);
-                }
-              }}
-            />
-            {source && (
-              <button
-                type="button"
-                className="shrink-0 rounded-md border border-rule px-2 py-0.5 text-[11px] text-ink-muted hover:border-accent/60 hover:text-ink disabled:opacity-60"
-                disabled={loading}
-                onClick={() => void fetchChoices()}
-                title={`Runs ${source.toolName} on ${env} with its saved values`}
-              >
-                {loading ? 'Loading…' : values.length ? 'Refresh' : `Load ${nouns}`}
-              </button>
-            )}
-          </div>
-          <div className="px-3 pb-1 pt-2 text-[10.5px] text-ink-faint">
-            {values.length
-              ? ql
-                ? `${shown.length} of ${values.length} ${nouns}`
-                : `${values.length} ${values.length === 1 ? noun : nouns} seen on ${env}`
-              : source
-                ? `No ${nouns} seen on ${env} yet. Load them from ${sourceTitle}.`
-                : `No ${nouns} seen on ${env} yet.`}
-          </div>
-          {options.length > 0 && (
-            <ul role="listbox" aria-label={nouns} className="max-h-[220px] overflow-y-auto px-1 pb-1">
-              {options.map((o, i) => {
-                const on = !fromList && o.v === current;
-                return (
-                  <li key={`${o.typed ? 'typed:' : ''}${o.v}`}>
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={on}
-                      onMouseEnter={() => setActive(i)}
-                      onClick={() => choose(o.v)}
-                      className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[12.5px] ${i === active ? 'bg-accent/12' : ''}`}
-                    >
-                      <span className="w-3 shrink-0 text-accent">{on ? '✓' : ''}</span>
-                      {o.typed ? (
-                        <span className="min-w-0 truncate text-ink-muted">
-                          Use <span className="font-mono text-ink">{o.v}</span>
-                        </span>
-                      ) : o.label ? (
-                        <span className="min-w-0 flex-1 truncate text-ink">{o.label}</span>
-                      ) : (
-                        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink">{o.v}</span>
-                      )}
-                      {!o.typed && o.label && <span className="ml-auto shrink-0 pl-2 font-mono text-[10.5px] text-ink-faint">{shortId(o.v)}</span>}
+      {open &&
+        createPortal(
+          <div
+            className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-6 pt-[8vh] backdrop-blur-[3px]"
+            onMouseDown={() => {
+              close();
+              trigger.current?.focus();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.stopPropagation();
+                close();
+                trigger.current?.focus();
+              }
+            }}
+          >
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label={`Choose ${a(noun)} ${noun} for ${param}`}
+              className={`rise flex max-h-[80vh] w-full flex-col overflow-hidden rounded-xl border border-rule-strong bg-surface-elevated shadow-[0_24px_80px_-12px_rgba(0,0,0,0.6)] ${cols.length > 3 ? 'max-w-5xl' : 'max-w-2xl'}`}
+              onMouseDown={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-center gap-3 border-b border-rule px-5 py-3.5">
+                <h2 className="display text-[15px] font-semibold">
+                  Choose {a(noun)} {noun}
+                </h2>
+                <span className="font-mono text-[11.5px] text-ink-faint">{param}</span>
+                <span className="flex-1" />
+                {source && (
+                  <span className="text-[11.5px] text-ink-faint">
+                    from{' '}
+                    <button type="button" className="font-medium text-ink-muted hover:text-accent hover:underline" onClick={() => onOpenSource?.(link.from)}>
+                      {sourceTitle}
                     </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <div className="border-t border-rule bg-wash px-3 py-2.5">
-            <div className="mb-1.5 text-[11px] text-ink-muted">Each time this request runs</div>
-            <div role="radiogroup" aria-label="Each time this request runs" className="inline-flex gap-0.5 rounded-lg bg-wash-strong p-0.5 text-[11.5px]">
-              <button type="button" role="radio" aria-checked={!fromList} className={seg(!fromList)} onClick={() => fromList && onValue(current ?? '')}>
-                Send the one I picked
-              </button>
-              <button type="button" role="radio" aria-checked={fromList} className={seg(fromList)} onClick={() => !fromList && onConnect?.(link)}>
-                Take it from the list
-              </button>
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="icon-btn h-6 w-6"
+                  aria-label="Close"
+                  onClick={() => {
+                    close();
+                    trigger.current?.focus();
+                  }}
+                >
+                  <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                    <path d="M6 6l12 12M18 6 6 18" />
+                  </svg>
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 border-b border-rule px-5 py-2.5 text-ink-faint">
+                <Search />
+                <input
+                  autoFocus
+                  aria-label={`Find ${a(noun)} ${noun}, or paste an id`}
+                  placeholder={cols.length ? `Find by any field, or paste an id` : `Find ${a(noun)} ${noun}, or paste an id`}
+                  className="min-w-0 flex-1 bg-transparent text-[13px] text-ink outline-none placeholder:text-ink-faint"
+                  value={q}
+                  onChange={(e) => {
+                    setQ(e.target.value);
+                    setActive(0);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setActive((i) => Math.min(i + 1, options.length - 1));
+                    } else if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setActive((i) => Math.max(i - 1, 0));
+                    } else if (e.key === 'Enter' && !e.metaKey && options[active]) {
+                      e.preventDefault();
+                      choose(options[active].v);
+                    }
+                  }}
+                />
+                <span className="shrink-0 text-[11px]">
+                  {values.length ? (ql ? `${shown.length} of ${values.length}` : `${values.length} seen on ${env}`) : ''}
+                </span>
+                {source && (
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-md border border-rule px-2 py-0.5 text-[11px] text-ink-muted hover:border-accent/60 hover:text-ink disabled:opacity-60"
+                    disabled={loading}
+                    onClick={() => void fetchChoices()}
+                    title={`Runs ${source.toolName} on ${env} with its saved values`}
+                  >
+                    {loading ? 'Loading…' : values.length ? 'Refresh' : `Load ${nouns}`}
+                  </button>
+                )}
+              </div>
+
+              <div className="min-h-[120px] flex-1 overflow-auto">
+                {options.length === 0 ? (
+                  <p className="px-5 py-6 text-[12px] text-ink-faint">
+                    {values.length
+                      ? `No ${noun} matches “${q.trim()}”.`
+                      : source
+                        ? `No ${nouns} seen on ${env} yet. Load them from ${sourceTitle}.`
+                        : `No ${nouns} seen on ${env} yet.`}
+                  </p>
+                ) : (
+                  <table role="listbox" aria-label={nouns} className="w-full border-separate border-spacing-0 text-[12.5px]">
+                    <thead className="sticky top-0 z-10 bg-surface-elevated">
+                      <tr className="text-left text-[10.5px] font-semibold uppercase tracking-[0.06em] text-ink-faint">
+                        <th className="w-7 border-b border-rule py-2 pl-5" />
+                        <th className="border-b border-rule py-2 pr-4 font-semibold">{heading(noun)}</th>
+                        {cols.map((k) => (
+                          <th key={k} className="whitespace-nowrap border-b border-rule py-2 pr-4 font-semibold" title={k}>
+                            {heading(k)}
+                          </th>
+                        ))}
+                        <th className="border-b border-rule py-2 pr-5 text-right font-semibold">Id</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {options.map((o, i) => {
+                        const on = !fromList && o.v === current;
+                        return (
+                          <tr
+                            key={`${o.typed ? 'typed:' : ''}${o.v}`}
+                            role="option"
+                            aria-selected={on}
+                            ref={(el) => {
+                              if (i === active && el) el.scrollIntoView({ block: 'nearest' });
+                            }}
+                            onMouseEnter={() => setActive(i)}
+                            onClick={() => choose(o.v)}
+                            className={`cursor-pointer ${i === active ? 'bg-accent/12' : ''}`}
+                          >
+                            <td className="border-b border-rule/60 py-1.5 pl-5 text-accent">{on ? '✓' : ''}</td>
+                            {o.typed ? (
+                              <td colSpan={cols.length + 2} className="border-b border-rule/60 py-1.5 pr-5 text-ink-muted">
+                                Use <span className="font-mono text-ink">{o.v}</span>
+                              </td>
+                            ) : (
+                              <>
+                                <td className="max-w-[260px] truncate border-b border-rule/60 py-1.5 pr-4 font-medium text-ink">{o.label ?? <span className="font-mono text-[12px]">{o.v}</span>}</td>
+                                {cols.map((k) => {
+                                  const f = o.row?.[k];
+                                  return (
+                                    <td
+                                      key={k}
+                                      className={`max-w-[220px] truncate whitespace-nowrap border-b border-rule/60 py-1.5 pr-4 ${typeof f === 'number' ? 'text-right tabular-nums text-ink' : 'text-ink-muted'}`}
+                                      title={f === undefined ? undefined : String(f)}
+                                    >
+                                      {f === undefined ? <span className="text-ink-faint">—</span> : String(f)}
+                                    </td>
+                                  );
+                                })}
+                                <td className="whitespace-nowrap border-b border-rule/60 py-1.5 pr-5 text-right font-mono text-[11px] text-ink-faint" title={o.v}>
+                                  {shortId(o.v)}
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+                {values.length > 0 && !cols.length && source && (
+                  <p className="px-5 py-2.5 text-[11px] text-ink-faint">Refresh to see more about each {noun}.</p>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-t border-rule bg-wash px-5 py-3">
+                <span className="text-[11px] text-ink-muted">Each time this request runs</span>
+                <div role="radiogroup" aria-label="Each time this request runs" className="inline-flex gap-0.5 rounded-lg bg-wash-strong p-0.5 text-[11.5px]">
+                  <button type="button" role="radio" aria-checked={!fromList} className={seg(!fromList)} onClick={() => fromList && onValue(current ?? '')}>
+                    Send the one I picked
+                  </button>
+                  <button type="button" role="radio" aria-checked={fromList} className={seg(fromList)} onClick={() => !fromList && onConnect?.(link)}>
+                    Take it from the list
+                  </button>
+                </div>
+                <p className="min-w-0 flex-1 text-[11px] leading-snug text-ink-faint">
+                  {fromList
+                    ? `Sends the first ${noun} ${sourceTitle} returns: the one kept from its last run, or it runs first. Agents are told the same.`
+                    : current
+                      ? `Sends ${label ?? shortId(current)} every time, until you pick another.`
+                      : `Pick one above, or take it from the list.`}
+                </p>
+              </div>
             </div>
-            <p className="mt-1.5 text-[11px] leading-snug text-ink-faint">
-              {fromList
-                ? `Sends the first ${noun} ${sourceTitle} returns: the one kept from its last run, or it runs first. Agents are told the same.`
-                : current
-                  ? `Sends ${label ?? shortId(current)} every time, until you pick another.`
-                  : `Pick one above, or take it from the list.`}
-            </p>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
