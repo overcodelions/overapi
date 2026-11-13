@@ -263,7 +263,7 @@ export function Journey(): JSX.Element | null {
   return (
     <div className="relative">
       <button
-        className={`flex h-[26px] items-center gap-1.5 rounded-full border px-2.5 text-[12px] ${open ? 'border-accent bg-accent/10 text-ink' : 'border-rule text-ink-muted hover:text-ink'}`}
+        className={`flex h-[36px] items-center gap-1.5 rounded-full border px-3 text-[13px] ${open ? 'border-accent bg-accent/10 text-ink' : 'border-rule text-ink-muted hover:text-ink'}`}
         title="From this API to an AI tool — what’s done and what’s next"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}

@@ -73,10 +73,46 @@ export function usableExample(v: unknown): boolean {
   return text.length <= 300 && !/\{\{|\$\{/.test(text);
 }
 
+/// The name an agent sees for each parameter. Model APIs only accept
+/// property names matching ^[a-zA-Z0-9_.-]{1,64}$, so a real name like
+/// `type[]` or `filter[status]` becomes `type` / `filter_status`; a clash
+/// with another parameter gets a numeric suffix.
+export function argKeys(tool: ToolDef): Map<string, string> {
+  const keys = new Map<string, string>();
+  const taken = new Set<string>(tool.params.filter((p) => /^[a-zA-Z0-9_.-]{1,64}$/.test(p.name)).map((p) => p.name));
+  if (tool.safety === 'destructive') taken.add('confirm');
+  for (const p of tool.params) {
+    if (/^[a-zA-Z0-9_.-]{1,64}$/.test(p.name)) {
+      keys.set(p.name, p.name);
+      continue;
+    }
+    const base = (p.name.replace(/\[\]$/, '').replace(/[^a-zA-Z0-9_.-]+/g, '_').replace(/^_+|_+$/g, '') || 'arg').slice(0, 60);
+    let key = base;
+    for (let i = 2; taken.has(key); i++) key = `${base}_${i}`;
+    taken.add(key);
+    keys.set(p.name, key);
+  }
+  return keys;
+}
+
+/// An agent's arguments back under the API's real parameter names.
+export function argsFromAgent(tool: ToolDef, args: Record<string, unknown>): Record<string, unknown> {
+  const keys = argKeys(tool);
+  const out: Record<string, unknown> = { ...args };
+  for (const [real, key] of keys) {
+    if (real === key || !(key in args)) continue;
+    out[real] = args[key];
+    delete out[key];
+  }
+  return out;
+}
+
 export function toMcpTool(tool: ToolDef): Tool {
   const properties: Record<string, object> = {};
   const required: string[] = [];
+  const keys = argKeys(tool);
   for (const p of tool.params) {
+    const key = keys.get(p.name) ?? p.name;
     const description = [p.description ?? p.schema.description, p.in === 'header' ? '(sent as a header)' : ''].filter(Boolean).join(' ');
     // The value last sent, as a hint of what a real one looks like — never
     // a chain variable, a secret, or anything long.
@@ -84,17 +120,17 @@ export function toMcpTool(tool: ToolDef): Tool {
     // A file: its content, never a path — overapi doesn't read files from
     // this machine for an agent.
     if (p.in === 'body' && (p.schema.format === 'binary' || p.schema.type === 'file')) {
-      properties[p.name] = {
+      properties[key] = {
         type: 'object',
         description: [description, 'A file: its content base64-encoded, and its name.'].filter(Boolean).join(' '),
         properties: { base64: { type: 'string' }, filename: { type: 'string' }, contentType: { type: 'string' } },
         required: ['base64'],
       };
-      if (p.required) required.push(p.name);
+      if (p.required) required.push(key);
       continue;
     }
-    properties[p.name] = { ...p.schema, ...(description ? { description } : {}), ...(usableExample(ex) ? { examples: [ex] } : {}) };
-    if (p.required) required.push(p.name);
+    properties[key] = { ...p.schema, ...(description ? { description } : {}), ...(usableExample(ex) ? { examples: [ex] } : {}) };
+    if (p.required) required.push(key);
   }
   if (tool.safety === 'destructive') {
     properties.confirm = { type: 'boolean', description: 'Must be true. This call deletes or irreversibly changes data; only set it when the user has asked for exactly this.' };
@@ -236,7 +272,7 @@ export function createServer(opts: ServeOptions): Server {
       return fail(`No tool named ${name}.`);
     }
     const { tool, project, env } = entry;
-    const args = (req.params.arguments ?? {}) as Record<string, unknown>;
+    const args = argsFromAgent(tool, (req.params.arguments ?? {}) as Record<string, unknown>);
     if (tool.safety === 'destructive' && args.confirm !== true) {
       return fail(`${name} is destructive. Call it again with confirm: true only if the user asked for exactly this.`);
     }

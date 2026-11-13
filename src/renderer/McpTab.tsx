@@ -74,9 +74,9 @@ export function McpTab(): JSX.Element {
               <Icon name="check" size={12} /> In Claude Code
             </span>
           )}
-          <span className="mb-1">
+          <div className="mb-1 flex">
             <Journey />
-          </span>
+          </div>
           <button className="btn mb-1 h-[36px] px-3.5 text-[13px]" title="Tidy, connect and document it — with your claude or codex" onClick={() => openSheet({ kind: 'agentready' })}>
             <Icon name="sparkle" size={13} /> Make it agent-ready
           </button>

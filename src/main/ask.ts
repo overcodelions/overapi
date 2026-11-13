@@ -59,7 +59,7 @@ export async function startAskServer(opts: Omit<ServeOptions, 'readOnly'>): Prom
 
 const SERVER = 'api';
 
-export function runAsk(opts: { bin: string; question: string; title: string; url: string; token: string; model?: string; onEvent: (e: AskEvent) => void }): { done: Promise<void>; stop: () => void } {
+export function runAsk(opts: { bin: string; question: string; history?: { question: string; answer: string }[]; title: string; url: string; token: string; model?: string; onEvent: (e: AskEvent) => void }): { done: Promise<void>; stop: () => void } {
   const mcp = JSON.stringify({ mcpServers: { [SERVER]: { type: 'http', url: opts.url, headers: { Authorization: `Bearer ${opts.token}` } } } });
   const args = [
     '-p',
@@ -75,7 +75,14 @@ export function runAsk(opts: { bin: string; question: string; title: string; url
     '--no-session-persistence',
     ...(opts.model ? ['--model', opts.model] : []),
   ];
-  const prompt = `Answer this question using the ${opts.title} tools you have. Call the tools you need — look things up rather than guessing — and when a tool needs an id, find it with another tool first. Then answer briefly and plainly, with the facts you found.\n\nQuestion: ${opts.question}`;
+  // Earlier questions in this conversation, so a follow-up ("and the one
+  // before it?") has something to follow. The answers carry the facts found;
+  // the tools are there to look up anything more.
+  const past = (opts.history ?? []).slice(-6);
+  const earlier = past.length
+    ? `This is a follow-up. The conversation so far:\n\n${past.map((t) => `Question: ${t.question}\nYour answer: ${t.answer.slice(0, 4000)}`).join('\n\n')}\n\n`
+    : '';
+  const prompt = `${earlier}Answer this question using the ${opts.title} tools you have. Call the tools you need — look things up rather than guessing — and when a tool needs an id, find it with another tool first. Then answer briefly and plainly, with the facts you found.\n\nQuestion: ${opts.question}`;
   const child = spawn(opts.bin, args, { env: process.env });
   const started = Date.now();
   let pending = '';
