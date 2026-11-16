@@ -14,6 +14,9 @@ describe('aboutRoute, more', () => {
   });
   it('reads a sub-resource as more, and ignores the query', () => {
     expect(aboutRoute('/teams/{id}/players/{id}/stats')).toEqual({ noun: 'player', kind: 'more' });
+    // A workspace slug before `me` isn't a thing to cover.
+    expect(aboutRoute('/api/v2/acme-eu/me')).toBeUndefined();
+    expect(aboutRoute('/api/v2/{id}/tickets/{id}/comments')).toEqual({ noun: 'comment', kind: 'list' });
     expect(aboutRoute('/Order_Lines?x=1')).toEqual({ noun: 'order-line', kind: 'list' });
   });
 });

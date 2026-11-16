@@ -34,11 +34,18 @@ const NOISE = /^(api|rest|v\d+(\.\d+)?|services?|public|internal|metadata|stats|
 /// word that isn't a parameter, and whether a parameter follows it.
 export function aboutRoute(route: string): { noun: string; kind: 'list' | 'detail' | 'more' } | undefined {
   const segs = route.split('?')[0].split('/').filter(Boolean);
+  let skipped = false;
   for (let i = segs.length - 1; i >= 0; i--) {
     const s = segs[i];
+    if (NOISE.test(s)) skipped = true;
     if (s.startsWith('{') || NOISE.test(s)) continue;
-    const noun = singular(s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+    const word = s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const noun = singular(word);
     if (!noun || /^\d/.test(noun)) return undefined;
+    // Past a word like `me` or `stats`, only a plural resource is what the
+    // route is about (`/players/{id}/stats`); a tenant or workspace slug
+    // (`/acme-eu/me`) is not.
+    if (skipped && noun === word) return undefined;
     const after = segs.slice(i + 1);
     if (!after.length) return { noun, kind: 'list' };
     if (after.length === 1 && after[0].startsWith('{')) return { noun, kind: 'detail' };

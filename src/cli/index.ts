@@ -33,7 +33,8 @@ const HELP = `overapi ${VERSION} — turn an existing API into MCP tools
 
 Usage:
   overapi import <spec|capture|collection|url> [-o <dir>]
-      OpenAPI 3, Swagger 2, a HAR capture or a Postman v2 collection.
+      OpenAPI 3, Swagger 2, a WSDL, a HAR capture, a Postman v2 collection
+      or a GraphQL introspection result — a file or a URL.
       Writes <dir>/overapi.json (default ./<name>/overapi.json).
   overapi tools <overapi.json>              List tools and what each environment offers.
   overapi check <overapi.json>              Agent-readiness: what will trip an agent up.
@@ -97,7 +98,8 @@ function selfCommand(): ServeCommand {
 async function main(argv: string[]): Promise<void> {
   const args = [...argv];
   const cmd = args.shift();
-  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
+  // `overapi import --help` is asking, not naming a file called --help.
+  if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h' || args.includes('--help') || args.includes('-h')) {
     process.stdout.write(`${HELP}\n`);
     return;
   }

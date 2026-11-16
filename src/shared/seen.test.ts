@@ -27,11 +27,11 @@ describe('seen values', () => {
   it('keeps the record an id came from, so a picker can tell two apart', () => {
     expect(extractSeen(page)['content[].id'][0].row).toEqual({ id: 'g1', name: 'All partners', status: 'ACTIVE', clientId: 'c9', memberCount: 3 });
     // An id inside the list item: its own fields first, then the rest of the item.
-    const board = { data: [{ playerMetadata: { id: '223094', name: 'Erling Haaland', team: { name: 'Man City' } }, stats: { goals: 21 }, tags: ['x'] }] };
+    const board = { data: [{ playerMetadata: { id: '223094', name: 'Rowan Hale', team: { name: 'Acme City' } }, stats: { goals: 21 }, tags: ['x'] }] };
     expect(extractSeen(board)['data[].playerMetadata.id'][0].row).toEqual({
       id: '223094',
-      name: 'Erling Haaland',
-      'team.name': 'Man City',
+      name: 'Rowan Hale',
+      'team.name': 'Acme City',
       'stats.goals': 21,
     });
     // A pointer to another record gets no row.
@@ -40,16 +40,16 @@ describe('seen values', () => {
   it('finds the record an id object names, and a name given in parts', () => {
     const players = {
       data: [
-        { id: { competitionId: '8', seasonId: '2026', playerId: '232980' }, name: { firstName: 'Max', lastName: 'Aarons' }, position: 'Defender', currentTeam: { id: '91', name: 'Bournemouth' } },
-        { id: { competitionId: '8', seasonId: '2026', playerId: '427637' }, name: { firstName: 'Tyler', lastName: 'Adams' }, position: 'Midfielder', currentTeam: { id: '91', name: 'Bournemouth' } },
+        { id: { competitionId: '8', seasonId: '2026', playerId: '232980' }, name: { firstName: 'Mara', lastName: 'Quill' }, position: 'Defender', currentTeam: { id: '91', name: 'Acme Rovers' } },
+        { id: { competitionId: '8', seasonId: '2026', playerId: '427637' }, name: { firstName: 'Theo', lastName: 'Brandt' }, position: 'Midfielder', currentTeam: { id: '91', name: 'Acme Rovers' } },
       ],
     };
     const s = extractSeen(players);
-    expect(s['data[].id.playerId'][0]).toMatchObject({ v: '232980', label: 'Max Aarons', row: { position: 'Defender', 'currentTeam.name': 'Bournemouth' } });
+    expect(s['data[].id.playerId'][0]).toMatchObject({ v: '232980', label: 'Mara Quill', row: { position: 'Defender', 'currentTeam.name': 'Acme Rovers' } });
     // Same on every row: doesn't name the row.
     expect(s['data[].id.competitionId']).toEqual([{ v: '8' }]);
     // One team, many players: the team keeps its own fields, not a player's.
-    expect(s['data[].currentTeam.id']).toEqual([{ v: '91', label: 'Bournemouth', row: { id: '91', name: 'Bournemouth' } }]);
+    expect(s['data[].currentTeam.id']).toEqual([{ v: '91', label: 'Acme Rovers', row: { id: '91', name: 'Acme Rovers' } }]);
   });
   it('reads chain paths', () => expect(seenPath('content[0].id')).toBe('content[].id'));
 });

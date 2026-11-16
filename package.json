@@ -36,6 +36,7 @@
     "cli": "node dist/cli/index.js",
     "example:server": "node examples/acme-orders-server.mjs",
     "example:soap": "node examples/acme-inventory-soap-server.mjs",
+    "example:webapp": "node examples/acme-support-app.mjs",
     "dist:mac": "npm run build && electron-builder --mac",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -7,7 +7,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-10
+## [0.1.0] - 2026-11-15
 
 ### Added
 - **Ways in:** OpenAPI 3, Swagger 2, HAR, Postman v2 and WSDL import; from a
@@ -22,9 +22,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   JSON in and out for agents, Faults as errors. A sample service to try.
 - **Workbench:** params as a query — what's sent on top, the rest as chips,
   a control per kind of value, a live URL and paste-to-fill; values seen in
-  earlier responses offered by name; copy as cURL, fetch, Python or HTTPie;
-  replay;
-  history; a readable response view with full JSON when truncated.
+  earlier responses offered by name, picked from a table of the records
+  they came from so look-alikes can be told apart; copy as cURL, fetch,
+  Python or HTTPie; replay; history; a readable response view with full
+  JSON when truncated.
 - **Chains:** which request gives the ids another needs, kept between calls;
   run-first steps; login requests that refresh themselves.
 - **Environments and sign-in:** bearer, API key, basic, WS-Security, OAuth 2
@@ -50,11 +51,28 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   example questions. A tool budget with suggestions, and a security scan that
   blocks team publishing on critical findings.
 - **Try as an agent:** ask in plain words and watch claude answer through
-  this API's own read-only MCP server.
+  this API's own read-only MCP server; follow-up questions build on the
+  conversation, and *New chat* starts over.
+- **Bracketed parameters:** names like `type[]` or `filter[status]` reach
+  agents as `type` and `filter_status`, and go out under their real names,
+  so model APIs no longer reject those tools.
 - **Publish:** Add to Claude Code, snippets for any MCP client, a file, or
   your team's overgo through overcli.
 - **CLI:** `import`, `tools`, `check`, `call`, `serve`, `install`, `test`,
   `load` and `scan`.
+
+- **Docs:** guides for getting started, recording a web app, sign-in,
+  sharing and safety, and the command line, in `docs/`. A sample web app
+  to record, `npm run example:webapp`. **Help** in the menu bar and a
+  **?** in the header open them, with the release notes and where to
+  report a problem.
+
+### Fixed
+- Recording coverage no longer counts short ids like `T-4821` or a
+  workspace slug before `/me` as kinds of things to find, so its
+  suggestions match what Build API makes.
+- `overapi <command> --help` prints help instead of looking for a file
+  named `--help`; the help lists every format `import` takes.
 
 ### Security
 - Projects from other people — a clone, or a pull that changes where an API
@@ -65,3 +83,6 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   uploaded; agents' own arguments can't name secrets; OAuth sign-in pages
   open only over https; the recorder answers only localhost; requests with a
   client certificate get their own connection.
+
+[Unreleased]: https://github.com/overcodelions/overapi/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/overcodelions/overapi/releases/tag/v0.1.0
