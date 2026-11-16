@@ -17,6 +17,14 @@
 </p>
 
 <p align="center">
+  <a href="docs/getting-started.md"><b>Getting started</b></a> ·
+  <a href="docs/record-a-web-app.md">Record a web app</a> ·
+  <a href="docs/sign-in.md">Sign-in</a> ·
+  <a href="docs/sharing-and-safety.md">Sharing and safety</a> ·
+  <a href="docs/cli.md">CLI</a>
+</p>
+
+<p align="center">
   Sibling of <a href="https://github.com/overcodelions/overcli">overcli</a> ·
   <a href="https://github.com/overcodelions/overgit">overgit</a> ·
   <a href="https://github.com/overcodelions/overdb">overdb</a>
@@ -31,6 +39,22 @@
 Every company has APIs agents should be able to use — and almost none of them come with a clean spec. Some have Swagger behind a login, some are SOAP, some exist only as the calls a web app makes. Pointing an agent at them raw gets you a hundred cryptic tools, ids it can't find, and a `DELETE` it shouldn't see.
 
 overapi is the step in between. Bring an API in however you can, use it like Insomnia or Postman, then make it **agent-ready** — names that say what they do, descriptions an agent can choose by, ids that flow from one call to the next, writes hidden until you allow them — and publish it as an MCP server. No account, no cloud: it runs on your Mac, and your secrets stay in the keychain.
+
+## Any website, as tools for your agents
+
+The API you need often has no docs and no spec — it's just what a web app calls behind the page. So open the app in overapi, sign in, and use it the way you always do:
+
+<p align="center">
+  <img alt="Recording the Acme Support web app in overapi's browser: overapi's bar across the top says Recording, 23 calls, while the app below shows open tickets and one ticket's conversation" src="docs/screenshots/record-browse.png" width="100%" />
+</p>
+
+Every call the page makes to its backend is kept — HTTPS included, no certificate to install, no proxy to set up. Pages, scripts, images and analytics are left out. overapi sees which call signed you in, which ids flowed from a list into the next request, and what you haven't opened yet; **Explore for me** can click around for the rest on its own, skipping anything that looks like delete, pay or sign out.
+
+<p align="center">
+  <img alt="Record traffic: 23 calls from Acme Support, the comments for ticket T-4821 open, the sign-in token found and passed to 22 calls, and Build API from 23 calls (7 kinds)" src="docs/screenshots/record.png" width="100%" />
+</p>
+
+Then **Build API**: ids become arguments, the sign-in becomes something overapi can redo on its own, and everything starts read-only. *Make it agent-ready* names and describes the tools, and *Add to Claude Code* puts them in your agent — a web app you only had a login for is now an MCP server. Try it with the sample app: `npm run example:webapp`, then Record › Browser › `http://localhost:4030` (any email, password `demo`). The full walk-through: [Record a web app](docs/record-a-web-app.md).
 
 ## How it goes
 
@@ -48,7 +72,7 @@ overapi is the step in between. Bring an API in however you can, use it like Ins
 - **GraphQL.** Point it at the endpoint (or an introspection file): every query becomes a read tool and every mutation a write, each with its query written out and its arguments typed — so an agent never has to write GraphQL itself.
 - **From a cURL.** "Copy as cURL" from the browser: ids in the path become arguments, the values become the example, any token goes to the keychain.
 - **From documentation.** PDFs, Markdown or HTML, a docs URL, or pasted text. claude finds the real spec files if the site links to them, and drafts one if it doesn't.
-- **Record a web app.** Sign in and use the app in overapi's browser — or your own Chrome, password manager and all — and its API calls become requests. Or let **Explore for me** click around on its own, skipping anything that looks like delete, pay or sign out.
+- **Record a web app.** Sign in and use the app in overapi's browser — or your own Chrome, password manager and all — and its API calls become requests ([how it looks](#any-website-as-tools-for-your-agents)). Or let **Explore for me** click around on its own, skipping anything that looks like delete, pay or sign out. No web app at hand? Point **Local address** at an API and use it through overapi's forwarding address instead.
 - **SOAP.** Each operation becomes a request with typed arguments; overapi builds the envelope (1.1 or 1.2, WS-Security if needed) and agents see JSON in and out.
 - **Paste it anywhere.** ⌘V a cURL, a spec or a docs URL outside a text field and New API opens with it already in.
 
@@ -116,7 +140,7 @@ Services that belong together — the APIs of one product — grouped, with **on
   <img alt="Review Acme Billing before it uses your secrets: where staging and production send requests, how each signs in, the secret names it reads, and two things worth a second look" src="docs/screenshots/review-secrets.png" width="100%" />
 </p>
 
-More in [SECURITY.md](SECURITY.md).
+More in [Sharing and safety](docs/sharing-and-safety.md) and [SECURITY.md](SECURITY.md).
 
 ## CLI
 
@@ -134,11 +158,11 @@ overapi load    ~/overapi/acme-orders/overapi.json --scenario checkout --users 2
 overapi scan    ~/overapi/acme-orders/overapi.json --fail-on high
 ```
 
-`overapi serve` also takes a workspace file and serves all its APIs as one server. From a checkout, use `node dist/cli/index.js` in place of `overapi`.
+`overapi serve` also takes a workspace file and serves all its APIs as one server. From a checkout, use `node dist/cli/index.js` in place of `overapi`. Every command and flag: [docs/cli.md](docs/cli.md).
 
 ## Run it
 
-Signed, notarized Mac builds go out on [GitHub Releases](https://github.com/overcodelions/overapi/releases) (nightly prereleases for now), and the app keeps itself up to date — Settings chooses automatic or ask-first, stable or beta.
+Download the signed, notarized Mac app from [GitHub Releases](https://github.com/overcodelions/overapi/releases/latest) — Apple Silicon or Intel. It keeps itself up to date; Settings chooses automatic or ask-first, stable or beta (nightly builds go to beta).
 
 To run it from source you need Node.js 22.12 or newer and macOS.
 
@@ -147,6 +171,7 @@ npm install
 npm run dev              # Vite + Electron
 npm run example:server   # a sample REST API: Acme Orders on :4010, token dev-token
 npm run example:soap     # a sample SOAP service: Acme Inventory on :8089
+npm run example:webapp   # a sample web app to record: Acme Support on :4030, password demo
 npm test
 npm run dist:mac         # build the .dmg and .zip
 ```

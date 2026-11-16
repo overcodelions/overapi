@@ -18,6 +18,7 @@ import { signInWithBrowser } from '../core/oauthBrowser';
 import { commandToken } from '../core/commandToken';
 import type { IPCInvokeMap, MainEvent, ProjectRef, SecretSource } from '../shared/ipc';
 import type { ServeCommand } from '../shared/install';
+import { GUIDES, MORE_HELP } from '../shared/help';
 import { emptyProject, slug, varPrefix, type EnvDef, type Project } from '../shared/project';
 import { isSystemFile, SYSTEM_FILE, type SystemDef, type SystemRef } from '../shared/system';
 import { extractSeen, seenKey, seenPath, type SeenValue } from '../shared/seen';
@@ -1614,7 +1615,29 @@ function startApp(): void {
     win.on('closed', () => (win = null));
   }
 
+  /// The menu bar. Without one, Electron's default Help menu links to
+  /// electronjs.org; this keeps the standard menus (Edit is what makes
+  /// copy and paste work) and points Help at overapi's own guides.
+  function appMenu(): Menu {
+    const open = (url: string) => () => void shell.openExternal(url);
+    return Menu.buildFromTemplate([
+      { role: 'appMenu' },
+      { role: 'editMenu' },
+      { role: 'viewMenu' },
+      { role: 'windowMenu' },
+      {
+        role: 'help',
+        submenu: [
+          ...GUIDES.map((g) => ({ label: g.label, click: open(g.url) })),
+          { type: 'separator' as const },
+          ...MORE_HELP.map((l) => ({ label: l.label, click: open(l.url) })),
+        ],
+      },
+    ]);
+  }
+
   void app.whenReady().then(async () => {
+    Menu.setApplicationMenu(appMenu());
     // Our icon in the Dock even unpackaged (packaged, the .icns does it).
     if (!app.isPackaged) app.dock?.setIcon(nativeImage.createFromPath(asset('icon.png')));
     const trayImage = nativeImage.createFromPath(asset('trayTemplate.png'));

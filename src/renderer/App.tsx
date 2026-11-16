@@ -22,6 +22,7 @@ import { SystemSheet, SystemView } from './SystemView';
 import { UpdatePrompt } from './UpdatePrompt';
 import { QuickSwitch } from './QuickSwitch';
 import type { ProjectRef } from '@shared/ipc';
+import { GUIDES, MORE_HELP, type HelpLink } from '@shared/help';
 
 export function App(): JSX.Element {
   const { boot, booted, bootError, project, loadError, toast, sheet, recording, system } = useStore();
@@ -233,6 +234,7 @@ function TitleBar(): JSX.Element {
             )}
           </>
         )}
+        <HelpButton />
         <button className="icon-btn" title="Settings" onClick={() => openSheet({ kind: 'settings' })}>
           <Icon name="settings" size={15} />
         </button>
@@ -602,4 +604,37 @@ function envFill(name: string): string {
       : k === 'production'
         ? 'bg-red-500/25 text-red-900 ring-red-500/50 dark:text-red-100'
         : 'bg-violet-500/25 text-violet-900 ring-violet-500/50 dark:text-violet-100';
+}
+
+/// The ? in the header: the guides, release notes and where to report a
+/// problem — the same links as the menu bar's Help menu.
+function HelpButton(): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const go = (url: string) => {
+    setOpen(false);
+    void window.overapi.invoke('shell:open', url);
+  };
+  const item = (l: HelpLink) => (
+    <button key={l.url} role="menuitem" className="block w-full px-3 py-1.5 text-left text-[12px] hover:bg-wash" onClick={() => go(l.url)}>
+      {l.label}
+    </button>
+  );
+  return (
+    <div className="relative">
+      <button className="icon-btn" title="Help" aria-label="Help" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Icon name="help" size={15} />
+      </button>
+      {open && (
+        <>
+          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div role="menu" className="absolute right-0 z-40 mt-1 w-56 overflow-hidden rounded-lg border border-rule bg-surface py-1 shadow-lg" onKeyDown={(e) => e.key === 'Escape' && setOpen(false)}>
+            <div className="label px-3 pb-1 pt-1.5">Guides</div>
+            {GUIDES.map(item)}
+            <div className="my-1 border-t border-rule" />
+            {MORE_HELP.map(item)}
+          </div>
+        </>
+      )}
+    </div>
+  );
 }

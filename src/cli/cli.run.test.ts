@@ -180,6 +180,13 @@ describe('run(): help, version, import', () => {
     expect(await cli(['--version'])).toMatchObject({ code: 0, stdout: '0.1.0\n' });
   });
 
+  it('a command with --help prints help instead of reading a file called --help', async () => {
+    for (const argv of [['import', '--help'], ['serve', '-h'], ['call', 'x.json', '--help']]) {
+      expect(await cli(argv)).toMatchObject({ code: 0, stdout: expect.stringContaining('Usage:') });
+    }
+    expect((await cli(['--help'])).stdout).toContain('a WSDL');
+  });
+
   it('imports a spec, then the project every later test uses', async () => {
     const r = await cli(['import', path.join(EXAMPLES, 'acme-orders.openapi.yaml'), '-o', path.join(tmp, 'imported')]);
     expect(r.code, r.stderr).toBe(0);

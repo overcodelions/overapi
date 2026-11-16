@@ -39,7 +39,10 @@ export function routeOf(path: string): string {
         /^\d+$/.test(s) ||
         /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ||
         /^[0-9a-f]{16,}$/i.test(s) ||
-        (/^[A-Za-z0-9_-]{8,}$/.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s))
+        (/^[A-Za-z0-9_-]{8,}$/.test(s) && /\d/.test(s) && /[A-Za-z]/.test(s)) ||
+        // A short prefixed id: T-4821, INV-20931, PO_1042. Three digits at
+        // least, so v2, s3 and oauth2 stay words.
+        /^[A-Za-z]{1,5}[-_]?\d{3,}$/.test(s)
           ? '{id}'
           : s,
       )
