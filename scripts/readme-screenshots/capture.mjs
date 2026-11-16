@@ -21,7 +21,10 @@ import path from 'node:path';
 
 const here = path.dirname(new URL(import.meta.url).pathname);
 const repo = path.resolve(here, '..', '..');
-const work = path.join(fs.realpathSync(os.tmpdir()), 'overapi-readme-shots');
+// A fresh directory of our own each run (mkdtemp: unpredictable name,
+// readable only by you), never a fixed name another process could have
+// made or pointed elsewhere first.
+const work = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'overapi-readme-shots-'));
 const raw = path.join(work, 'raw');
 const userData = path.join(work, 'user-data');
 const only = process.argv.slice(2);
@@ -126,6 +129,7 @@ async function session(theme, scenes) {
     // Leave the scene as it was, to see what went wrong.
     await page.screenshot({ path: path.join(work, 'failed.png') }).catch(() => {});
     fs.writeFileSync(path.join(work, 'failed.txt'), await page.evaluate(() => document.body.innerText).catch(() => ''));
+    console.error(`Failed — the scene as it was is in ${work} (failed.png, failed.txt).`);
     throw e;
   } finally {
     await app.close();
@@ -279,4 +283,4 @@ await session('dark', async (page, shot, ids) => {
 });
 
 execFileSync('python3', [path.join(here, 'frame.py'), raw, path.join(repo, 'docs', 'screenshots')], { stdio: 'inherit' });
-fs.rmSync(userData, { recursive: true, force: true });
+fs.rmSync(work, { recursive: true, force: true });
